@@ -1,0 +1,32 @@
+# /etc/server-hands/config.toml
+# Generate the [[drive]] entries with `sudo handsctl discover --write`, then review labels.
+listen = "0.0.0.0:7787"
+request_ttl_secs = 600
+# Host or IP shown in the pairing QR (default: first address from `hostname -I`).
+# advertise_host = "server.lan"
+
+# Containers to include. Identified by LUKS UUID (never by /dev/sdX).
+# [[drive]]
+# luks_uuid = "00000000-0000-0000-0000-000000000000"
+# label = "Disk-1"
+
+[post_unlock]
+# Pool mounts, restarted (after reset-failed) once every present configured drive is unlocked and its fstab mount is up.
+# This is what the OMV mergerfs plugin's "restart pool" does: `systemctl restart <escaped mount point>.mount`.
+# Find the unit name with: systemd-escape --path --suffix=mount /srv/mergerfs/Pool
+mount_units = []          # e.g. ['srv-mergerfs-Pool.mount']
+# Started with --no-block after /run/server-hands/unlocked exists.
+# Prefer [[script]] below for containers; use this only for plain systemd units.
+service_units = []        # e.g. ["smbd.service", "nmbd.service"]
+
+# Scripts run as root after everything is unlocked (and the pool is restarted). The phone can only start the ones listed here.
+# The file and its directory must be owned by root and not writable by group/others, and must not live under /home.
+# Output: journalctl -u server-hands-script-<name>      Example: /usr/share/server-hands/post-unlock-example.sh
+# mode = "auto"   runs by itself right after the unlock, in the order listed
+# mode = "manual" (default) shows up in the app with a Run button, usable once the drives are unlocked
+# [[script]]
+# name = "media"                      # [A-Za-z0-9_-], up to 32
+# label = "Media containers"          # shown in the app (default: name)
+# path = "/etc/server-hands/scripts/media.sh"
+# mode = "auto"
+# timeout_secs = 300                  # killed after this long (1..=3600)

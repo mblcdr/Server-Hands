@@ -1,0 +1,128 @@
+name: app
+
+# Every push/PR: run the Kotlin tests and build an APK.
+# With the signing secrets present (see docs/android-release.md) the APK is a signed release build;
+# otherwise (forks, PRs without secrets) it is an unsigned-key debug build.
+# Tags `v*`: also attach the signed APK and its checksum to the GitHub Release for that tag.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["app/**", "protocol/**", "server/crates/hands-proto/**", ".github/workflows/app.yml"]
+  pull_request:
+    paths: ["app/**", "protocol/**", ".github/workflows/app.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attaches the APK to the release on tags
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            name="${GITHUB_REF_NAME#v}"
+          else
+            name="0.0.0-${GITHUB_RUN_NUMBER}"
+          fi
+          # versionCode = major*10000 + minor*100 + patch for X.Y.Z tags, so it only ever goes up.
+          IFS=. read -r a b c <<< "${name%%[-+]*}"
+          code=$(( ${a:-0} * 10000 + ${b:-0} * 100 + ${c:-0} ))
+          [ "$code" -gt 0 ] || code=1
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "App version $name (code $code)"
+
+      - name: Tests
+        working-directory: app
+        run: ./gradlew :core:crypto:jvmTest :core:protocol:jvmTest :androidApp:testDebugUnitTest
+
+      - name: Require the signing key on tags
+        if: startsWith(github.ref, 'refs/tags/v') && env.KEYSTORE_B64 == ''
+        run: |
+          echo "::error::Secret ANDROID_KEYSTORE_BASE64 is not set. See docs/android-release.md."
+          exit 1
+
+      - name: Decode signing key
+        id: key
+        if: env.KEYSTORE_B64 != ''
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "SERVERHANDS_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        working-directory: app
+        env:
+          SERVERHANDS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SERVERHANDS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SERVERHANDS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          task=assembleDebug; dir=debug
+          if [ "${{ steps.key.outputs.signed }}" = true ]; then task=assembleRelease; dir=release; fi
+          ./gradlew ":androidApp:$task" -PversionName="${{ steps.ver.outputs.name }}" -PversionCode="${{ steps.ver.outputs.code }}"
+          mkdir -p ../dist
+          cp "androidApp/build/outputs/apk/$dir/androidApp-$dir.apk" "../dist/server-hands_${{ steps.ver.outputs.name }}.apk"
+
+      - name: Verify signature and checksum
+        working-directory: dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          echo "Android SDK: ${sdk:-<not set>}"
+          apksigner=$(find "$sdk/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          if [ -z "$apksigner" ]; then
+            echo "::error::apksigner not found under '$sdk/build-tools'"
+            ls -la "$sdk" "$sdk/build-tools" || true
+            exit 1
+          fi
+          echo "Using $apksigner"
+          ls -l
+          for apk in ./*.apk; do
+            "$apksigner" verify --verbose --print-certs "$apk" 2>&1 | tee "$RUNNER_TEMP/apksigner.txt"
+            if [ "${{ steps.key.outputs.signed }}" = true ] && ! grep -Eq "Signer.*certificate SHA-256 digest" "$RUNNER_TEMP/apksigner.txt"; then
+              echo "::error::$apk is not signed with the release key"
+              exit 1
+            fi
+          done
+          sha256sum ./*.apk | tee SHA256SUMS
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-hands-apk
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Attach to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && steps.key.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --generate-notes
+          gh release upload "$tag" dist/*.apk dist/SHA256SUMS --clobber

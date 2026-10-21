@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/hands-proto", "crates/handsd", "crates/handsctl", "crates/hands-client"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"   # a panic must never format a payload
+strip = true

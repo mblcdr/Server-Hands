@@ -1,0 +1,64 @@
+[Unit]
+Description=Server Hands: phone-approved LUKS unlock
+Documentation=file:///usr/share/doc/server-hands/README.md
+# Do not wait for local-fs.target: missing encrypted fstab devices can delay it.
+DefaultDependencies=no
+After=systemd-udevd.service systemd-tmpfiles-setup.service network.target
+Requires=handsd.socket
+Before=shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/handsd --config /etc/server-hands/config.toml
+Restart=on-failure
+RestartSec=5s
+StateDirectory=server-hands
+StateDirectoryMode=0700
+RuntimeDirectory=server-hands
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+ConfigurationDirectory=server-hands
+
+# Resource limits. Unlock runs in a transient scope (see unlock_wrapper) with its own cap, because
+# argon2id needs ~1 GiB; this unit only ever holds the TLS front end and the request state.
+MemoryMax=32M
+MemorySwapMax=0
+TasksMax=32
+LimitCORE=0
+LimitMEMLOCK=infinity
+
+# Sandbox. The daemon never touches device-mapper itself (the unlock child does, outside this sandbox),
+# so it needs no CAP_SYS_ADMIN. CAP_IPC_LOCK is for mlockall.
+User=root
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_IPC_LOCK
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+DevicePolicy=closed
+# Only to read the ext4 superblock of an unlocked drive and learn which fstab entry to mount.
+DeviceAllow=block-device-mapper r
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

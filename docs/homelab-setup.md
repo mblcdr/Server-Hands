@@ -1,0 +1,39 @@
+# Homelab setup (draft, finalised in Phase 4)
+
+1. BIOS: Restore on AC power loss = Power On; enable Wake-on-LAN. DHCP reservation for the server.
+2. Install the package, either from the apt repository (preferred, gives upgrades: see `apt-repo.md`) or from a downloaded file: `sudo apt install ./server-hands_X.Y.Z_amd64.deb`
+3. `sudo handsctl discover --write`, then review labels and the `[post_unlock]` lists in `/etc/server-hands/config.toml`. Drives with an `/etc/crypttab` entry are skipped and reported.
+4. Add a phone-only keyslot per drive (you will be prompted for the existing passphrase; the new one is generated and shown once for entry into the app):
+   `sudo handsctl add-phone-key <luks-uuid>` (libcryptsetup directly; the existing passphrase is read from the tty, nothing goes through argv)
+5. Post-unlock actions. Docker and the other services are **not** gated: they start at boot as usual. Containers that need the encrypted drives are started by scripts instead, so containers that only use the root disk are unaffected.
+   - Stop the dependent containers from starting at boot, so they do not come up on empty mount points: set `restart: "no"` in their compose files (or `docker update --restart=no <container>`) so the script is the only thing that starts them.
+   - Put the commands in a script, e.g. start from `/usr/share/server-hands/post-unlock-example.sh`:
+     ```
+     sudo install -d -m 0755 /etc/server-hands/scripts
+     sudo install -m 0755 /usr/share/server-hands/post-unlock-example.sh /etc/server-hands/scripts/media.sh
+     sudo nano /etc/server-hands/scripts/media.sh
+     ```
+     It must be owned by root and not writable by anyone else (its directory too), and must not be under `/home`. handsd refuses to run it otherwise.
+   - Register it in `/etc/server-hands/config.toml`:
+     ```
+     [[script]]
+     name = "media"
+     label = "Media containers"
+     path = "/etc/server-hands/scripts/media.sh"
+     mode = "auto"      # runs right after the unlock; "manual" = only when you tap Run in the app
+     ```
+     Scripts run as root in a transient unit, in the order listed, after the pool is refreshed. A non-zero exit or the `timeout_secs` limit (default 300) shows as "failed" in the app. Output: `journalctl -u server-hands-script-media`.
+   - Test it without a reboot: `sudo systemctl restart handsd`, unlock (or, with the drives already open, handsd runs `auto` scripts at startup), then check the app's "After unlock" card.
+   - The mergerfs pool: list its mount unit in `mount_units` (`systemd-escape --path --suffix=mount /srv/mergerfs/Pool` prints the name, e.g. `srv-mergerfs-Pool.mount`). After the drives are mounted handsd runs `systemctl restart` on it, exactly as the OMV mergerfs plugin's "restart pool" action does. If something holds the pool open (a running container or Samba), the restart can fail with "target is busy"; keep those out of boot, or start them from a script.
+   - Optional hard gating of a systemd service (the old approach): `sudo install -D -m644 /usr/share/server-hands/gated-service.conf /etc/systemd/system/<unit>.d/server-hands.conf`, add the unit to `service_units`.
+6. `sudo systemctl enable --now handsd.socket handsd.service`, then run `systemd-analyze security handsd.service` and expect an exposure of 3.0 or lower.
+7. `sudo handsctl pair`, scan the QR in the app, confirm the 6-digit code on both sides.
+8. Shorter boot delay (optional, recommended). The locked drives' fstab entries make systemd wait for their devices for the default 90 s before giving up, which stalls boot. Lower the default device timeout:
+   ```
+   sudo install -D -m644 /usr/share/server-hands/10-server-hands.conf /etc/systemd/system.conf.d/10-server-hands.conf
+   sudo systemctl daemon-reexec     # or just reboot
+   ```
+   This sets `DefaultDeviceTimeoutSec=10s` in `[Manager]`. It is global (every device wait in fstab, also USB or network disks), so use a larger value if you have slow-appearing disks. OMV regenerates `/etc/fstab`, so per-entry `x-systemd.device-timeout=` options would be overwritten; the global setting survives. Check the effect after a reboot with `systemd-analyze blame | head` and `systemd-analyze critical-chain`. To undo: delete the file and `systemctl daemon-reexec`.
+9. Reboot, open the app, approve. Check the OMV GUI shows the drives unlocked and mounted.
+
+Recovery (lost phone): unlock in the OMV GUI with the human passphrase; `sudo handsctl revoke <device>`; `cryptsetup luksKillSlot <dev> <slot>`.

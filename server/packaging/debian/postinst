@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+# Deliberately not enabled automatically: run `handsctl discover --write` and pair first (see README).
+[ -d /run/systemd/system ] && systemctl daemon-reload || true
+exit 0

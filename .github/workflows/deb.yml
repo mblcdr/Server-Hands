@@ -1,0 +1,190 @@
+name: deb
+
+# Every push/PR: test and build the .deb, upload it as an artifact.
+# Tags `v*` (and a manual run with "publish" ticked): also publish it to the signed apt repository on GitHub Pages
+# (see docs/apt-repo.md for the one-time setup).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["server/**", "docs/homelab-setup.md", "docs/site/**", ".github/workflows/deb.yml"]
+  pull_request:
+    paths: ["server/**", "docs/homelab-setup.md", "docs/site/**", ".github/workflows/deb.yml"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to the apt repository"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Debian 13: the same glibc as OpenMediaVault 8, so the binaries run where they will be installed.
+    container: debian:13
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - name: System packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential curl ca-certificates pkg-config git
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      - name: Version
+        id: ver
+        working-directory: server
+        run: |
+          base=$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"name":"handsd","version":"\([^"]*\)".*/\1/p')
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            # Snapshot builds sort after the last release and before the next one.
+            v="${base}+git${GITHUB_RUN_NUMBER}.$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Package version: $v"
+
+      - name: Format and tests
+        working-directory: server
+        run: |
+          cargo fmt --all --check
+          cargo test --workspace --locked
+
+      - name: Build release binaries and the .deb
+        working-directory: server
+        run: |
+          cargo build --release --workspace --locked
+          cargo deb -p handsd --no-build --deb-version "${{ steps.ver.outputs.version }}" -o target/debian/
+          cd target/debian && sha256sum *.deb > SHA256SUMS
+          ls -l
+
+      - name: Check the package
+        working-directory: server/target/debian
+        run: |
+          dpkg-deb --info ./*.deb
+          dpkg-deb --contents ./*.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-hands-deb
+          path: |
+            server/target/debian/*.deb
+            server/target/debian/SHA256SUMS
+          if-no-files-found: error
+
+      # The test client used in docs/phase2-box-test.md. Not part of the package.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hands-client-linux-amd64
+          path: server/target/release/hands-client
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    container: debian:13
+    permissions:
+      contents: write # pushes the gh-pages branch
+    concurrency:
+      group: apt-repo
+      cancel-in-progress: false
+    env:
+      APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+      APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+    steps:
+      - name: Check signing key is configured
+        run: |
+          if [ -z "$APT_GPG_PRIVATE_KEY" ]; then
+            echo "::error::Secret APT_GPG_PRIVATE_KEY is not set. See docs/apt-repo.md."
+            exit 1
+          fi
+
+      - name: System packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends apt-utils gnupg git ca-certificates gzip
+
+      - uses: actions/checkout@v4
+        with:
+          path: src
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-hands-deb
+          path: new
+
+      - name: Check out the existing repository (gh-pages)
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          url="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git ls-remote --exit-code --heads "$url" gh-pages >/dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$url" site
+          else
+            git init -q site
+            git -C site checkout -q --orphan gh-pages
+            git -C site remote add origin "$url"
+          fi
+
+      - name: Add the package and regenerate signed indexes
+        working-directory: site
+        shell: bash
+        run: |
+          export GNUPGHOME="$(mktemp -d)"; chmod 700 "$GNUPGHOME"
+          echo "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          keyid=$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^sec/ {print $5; exit}')
+          sign="gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 -u $keyid"
+          pass() { printf '%s' "${APT_GPG_PASSPHRASE:-}"; }
+
+          mkdir -p pool
+          cp ../new/*.deb pool/
+          rm -f Packages Packages.gz Release Release.gpg InRelease
+          apt-ftparchive packages pool > Packages
+          gzip -9kf Packages
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin=server-hands \
+            -o APT::FTPArchive::Release::Label=server-hands \
+            -o APT::FTPArchive::Release::Suite=stable \
+            -o APT::FTPArchive::Release::Codename=stable \
+            -o APT::FTPArchive::Release::Architectures=amd64 \
+            -o APT::FTPArchive::Release::Description="Server Hands: phone-approved LUKS unlock for OpenMediaVault" \
+            release . > Release
+          $sign -abs -o Release.gpg Release 3< <(pass)
+          $sign --clearsign -o InRelease Release 3< <(pass)
+          gpg --batch --export "$keyid" > server-hands.gpg
+          gpg --batch --armor --export "$keyid" > server-hands.asc
+          fpr=$(gpg --batch --with-colons --fingerprint "$keyid" | awk -F: '/^fpr/ {print $10; exit}')
+          echo "$fpr" | tee key-fingerprint.txt
+          touch .nojekyll
+
+          owner="${GITHUB_REPOSITORY%%/*}"
+          base="https://$(echo "$owner" | tr 'A-Z' 'a-z').github.io/${GITHUB_REPOSITORY#*/}"
+          sed -e "s|__BASE__|$base|g" -e "s|__FPR__|$fpr|g" -e "s|__VERSION__|${{ needs.build.outputs.version }}|g" \
+            ../src/docs/site/index.html > index.html
+
+      - name: Publish
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "apt repository: ${{ needs.build.outputs.version }}" || { echo "nothing to publish"; exit 0; }
+          git push origin HEAD:gh-pages

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server Hands: unlock your homelab from your phone</title>
+<meta name="description" content="Phone-approved LUKS unlock for OpenMediaVault. Open the app, use your fingerprint, and your encrypted drives unlock end to end encrypted.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236d5efc'/%3E%3Cpath d='M11 14v-2a5 5 0 0 1 10 0v2' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round'/%3E%3Crect x='8' y='14' width='16' height='11' rx='3' fill='white'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #0b0d14; --bg2: #121624; --card: #161b2c; --line: #263050;
+  --text: #e8ebf5; --muted: #98a2c3; --accent: #7c6cff; --accent2: #35d0ba;
+  --code: #0a0c13; --glow: rgba(124,108,255,.28);
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f6f7fc; --bg2: #ffffff; --card: #ffffff; --line: #dfe3f2; --text: #151a2e; --muted: #5a6385; --accent: #5b4af0; --accent2: #0ea58f; --code: #12172a; --glow: rgba(91,74,240,.18); }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.01em; color: var(--text); text-decoration: none; }
+.logo { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: grid; place-items: center; }
+.logo svg { width: 18px; height: 18px; }
+nav .links { display: flex; gap: 22px; font-size: 15px; }
+nav .links a { color: var(--muted); text-decoration: none; }
+nav .links a:hover { color: var(--text); }
+.hero { position: relative; text-align: center; padding: 72px 0 80px; overflow: hidden; }
+.hero::before { content: ""; position: absolute; inset: -40% -10% auto; height: 520px; background: radial-gradient(closest-side, var(--glow), transparent); pointer-events: none; }
+.pill { display: inline-block; font-size: 13px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 99px; color: var(--muted); background: var(--bg2); }
+h1 { font-size: clamp(2.2rem, 6vw, 4rem); line-height: 1.08; letter-spacing: -.03em; margin: 22px auto 18px; max-width: 16ch; }
+h1 em { font-style: normal; background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lead { font-size: 1.15rem; color: var(--muted); max-width: 58ch; margin: 0 auto 30px; }
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.btn { display: inline-block; padding: 12px 22px; border-radius: 12px; font-weight: 600; text-decoration: none; border: 1px solid var(--line); color: var(--text); background: var(--bg2); }
+.btn.primary { background: linear-gradient(135deg, var(--accent), #5a49e8); color: #fff; border-color: transparent; box-shadow: 0 8px 28px var(--glow); }
+.btn:hover { transform: translateY(-1px); }
+section { padding: 56px 0; }
+h2 { font-size: clamp(1.6rem, 3.5vw, 2.2rem); letter-spacing: -.02em; margin: 0 0 8px; }
+.sub { color: var(--muted); margin: 0 0 32px; max-width: 62ch; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+.card .ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 25%, transparent), color-mix(in srgb, var(--accent2) 25%, transparent)); font-size: 20px; margin-bottom: 12px; }
+.card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+.card p { margin: 0; color: var(--muted); font-size: .95rem; }
+.flow { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); counter-reset: s; }
+.flow .step { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px 20px 20px 20px; }
+.flow .step::before { counter-increment: s; content: counter(s); display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+.flow b { display: block; margin-bottom: 4px; }
+.flow span { color: var(--muted); font-size: .92rem; }
+.install { background: var(--bg2); border: 1px solid var(--line); border-radius: 20px; padding: 26px; }
+.codebox { position: relative; background: var(--code); border-radius: 12px; margin: 12px 0 4px; }
+pre { margin: 0; padding: 18px 76px 18px 18px; overflow-x: auto; color: #d8def5; font: 13.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.copy { position: absolute; top: 10px; right: 10px; border: 1px solid #2c3556; background: #1a2038; color: #c8d0ee; border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+.copy:hover { background: #232b4b; }
+.fp { font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; word-break: break-all; color: var(--accent2); }
+.note { color: var(--muted); font-size: .92rem; }
+footer { border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--muted); font-size: .9rem; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="#"><span class="logo"><svg viewBox="0 0 24 24" fill="none"><path d="M8 11V9a4 4 0 0 1 8 0v2" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><rect x="5" y="11" width="14" height="10" rx="3" fill="#fff"/></svg></span>Server Hands</a>
+    <div class="links"><a href="#how">How it works</a><a href="#install">Install</a><a href="https://github.com/mblcdr/Server-Hands">GitHub</a></div>
+  </nav>
+
+  <header class="hero">
+    <span class="pill">Debian 13 · OpenMediaVault 8 · Android</span>
+    <h1>Unlock your homelab <em>from your phone</em></h1>
+    <p class="lead">Your server boots with its encrypted drives locked. Open the app, use your fingerprint, and the drives unlock, the pool comes back and your containers start. The passphrases never leave your phone unencrypted.</p>
+    <div class="cta"><a class="btn primary" href="#install">Install on the server</a><a class="btn" href="https://github.com/mblcdr/Server-Hands#readme">Read the docs</a></div>
+  </header>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="sub">A small Rust service waits at boot. Your phone talks only to the server it was paired with.</p>
+    <div class="flow">
+      <div class="step"><b>Boot</b><span>The server starts with LUKS drives locked and publishes an unlock request.</span></div>
+      <div class="step"><b>Open the app</b><span>It verifies the server's pinned identity and shows which drives are waiting.</span></div>
+      <div class="step"><b>Fingerprint</b><span>A biometric releases the passphrases, sealed to a one-time key held only in server memory.</span></div>
+      <div class="step"><b>Back to normal</b><span>Drives unlock and mount, the mergerfs pool refreshes, your scripts bring up the containers.</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Built to be boring and safe</h2>
+    <p class="sub">LAN only, no cloud, no relay, no account.</p>
+    <div class="grid">
+      <div class="card"><div class="ic">🔐</div><h3>End-to-end encrypted</h3><p>HPKE to a per-request ephemeral key on top of pinned TLS 1.3. Recorded traffic or a stolen disk reveals nothing.</p></div>
+      <div class="card"><div class="ic">🤳</div><h3>Biometric vault</h3><p>Passphrases sit in an Android Keystore vault that needs a fresh strong biometric for every use.</p></div>
+      <div class="card"><div class="ic">🛡️</div><h3>No impersonation</h3><p>Pairing is done once over a QR from your SSH console. A changed server key is a hard failure.</p></div>
+      <div class="card"><div class="ic">⚙️</div><h3>Post-unlock scripts</h3><p>Run scripts automatically after unlock, or start them from the app. Only containers that need the drives wait.</p></div>
+      <div class="card"><div class="ic">🧩</div><h3>OpenMediaVault aware</h3><p>Mounts through your existing fstab entries and refreshes the mergerfs pool like the OMV plugin does.</p></div>
+      <div class="card"><div class="ic">🪶</div><h3>Tiny and sandboxed</h3><p>A small native systemd service, locked down to a low exposure score. Revoke a lost phone with one command.</p></div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>Install on the server</h2>
+    <p class="sub">Signed apt repository for Debian 13 / OpenMediaVault 8, amd64. Current version: <b>__VERSION__</b>.</p>
+    <div class="install">
+      <b>1. Add the repository and install</b>
+      <div class="codebox"><pre id="c1">sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL __BASE__/server-hands.gpg | sudo tee /etc/apt/keyrings/server-hands.gpg &gt;/dev/null
+echo "deb [signed-by=/etc/apt/keyrings/server-hands.gpg] __BASE__/ ./" | sudo tee /etc/apt/sources.list.d/server-hands.list
+sudo apt update &amp;&amp; sudo apt install server-hands</pre><button class="copy" data-t="c1">Copy</button></div>
+      <p class="note">The service is not enabled automatically. Continue with <a href="https://github.com/mblcdr/Server-Hands/blob/main/docs/homelab-setup.md">the setup guide</a>: discover drives, pair your phone, add post-unlock scripts.</p>
+      <b>2. Verify the signing key</b>
+      <p class="note">Compare this fingerprint with the one in the project README before trusting the key:</p>
+      <div class="fp">__FPR__</div>
+      <div class="codebox"><pre id="c2">gpg --show-keys --with-fingerprint /etc/apt/keyrings/server-hands.gpg</pre><button class="copy" data-t="c2">Copy</button></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Server Hands · MIT licensed</span>
+    <span><a href="https://github.com/mblcdr/Server-Hands">Source</a> · <a href="server-hands.asc">Signing key</a></span>
+  </footer>
+</div>
+<script>
+document.querySelectorAll('.copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var text = document.getElementById(b.dataset.t).innerText;
+    var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).then(done); }
+  });
+});
+</script>
+</body>
+</html>
