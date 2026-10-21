@@ -3,6 +3,7 @@ name: deb
 # Every push/PR: test and build the .deb, upload it as an artifact.
 # Tags `v*` (and a manual run with "publish" ticked): also publish it to the signed apt repository on GitHub Pages
 # (see docs/apt-repo.md for the one-time setup).
+# Tags `v*`: also attach the .deb (named handsd_<version>_<arch>.deb by cargo-deb) and its checksum to the GitHub Release.
 on:
   push:
     branches: [main]
@@ -96,6 +97,30 @@ jobs:
           name: hands-client-linux-amd64
           path: server/target/release/hands-client
           if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attaches the .deb to the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-hands-deb
+          path: dist
+
+      - name: Attach to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # The APK workflow uploads its own SHA256SUMS to the same release, so keep the names distinct.
+          mv dist/SHA256SUMS dist/SHA256SUMS-deb
+          ls -l dist
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --generate-notes
+          gh release upload "$tag" dist/*.deb dist/SHA256SUMS-deb --clobber
 
   publish:
     needs: build
