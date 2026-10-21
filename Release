@@ -1,0 +1,23 @@
+Architectures: amd64
+Codename: stable
+Date: Wed, 21 Oct 2026 17:02:17 +0000
+Description: Server Hands: phone-approved LUKS unlock for OpenMediaVault
+Label: server-hands
+Origin: server-hands
+Suite: stable
+MD5Sum:
+ 6bf001f86dffaf19e70ed73f14e8f35d              646 Packages
+ 891ea77da2591c17187bb99609da281a              476 Packages.gz
+ 82ecf8dec399b06e82d2a79fba8823f9              204 Release
+SHA1:
+ 8999706a28d3289a2d44ff34dfe9f7b810685f50              646 Packages
+ e191afee02557576efb99cc3742a8f5e50ae0aa7              476 Packages.gz
+ 0de36383d842d41d61037a1f474b8570a7db74cb              204 Release
+SHA256:
+ 8481541323a236a36bce10a8cc5e4f7774951caa92aab0b8d6ef02ed0fa09ea2              646 Packages
+ bd4c8c454854e55ffe56eba6d6cf13f7cbf4cb03f7c892acd1167bbf404e67b7              476 Packages.gz
+ 1248a0d1dfafd29487f092493cc5db38aa1887d111f65fe3d97151aa5d3178f4              204 Release
+SHA512:
+ c9849f9d60779007646229d9396df5cf9983068bc157a444421d4fd602b6085005f256a674c9799d2ad089a7eb29103c5c5b75d66a912c49e22df6c8c7ea73f1              646 Packages
+ f2ece809ca25726f4bb0c96010502c8fb0219d7f3725181e64909996e002a99a52914c5a71e97a4c620f0355bf4b13cf5e22fd9c0626d5390528133651675f70              476 Packages.gz
+ 7e14f803d272eecf9ecc97ba5e04bd67258e722c9857853fbead8b7e3123216b2b8d3de7f9f0435bc02ef980962927fe433c48e2ddafd77ebab53e43750d5318              204 Release

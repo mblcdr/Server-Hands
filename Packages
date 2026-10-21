@@ -1,0 +1,17 @@
+Package: server-hands
+Architecture: amd64
+Version: 0.3.0
+Priority: optional
+Section: admin
+Maintainer: Hamid Moazzami <hi@samsaz.com>
+Installed-Size: 2738
+Depends: libc6, libcryptsetup12, systemd
+Recommends: cryptsetup-bin
+Filename: pool/server-hands_0.3.0_amd64.deb
+Size: 1020864
+MD5sum: 70ad28e6283af85f0f03350187b382c6
+SHA1: 7ae2d23c88afd098c5846838ca7cad7e054574dc
+SHA256: 93536540c694b65e7c16130ab7ba77251fdc098e40872c7af1ab890527330784
+SHA512: 7ebca0af38d822af7195eb1d7456aeea2913a56aebbcd787949ca73971ae461d133cdf1098292eb54bff5c683bfc8d0899023580dae9e2ae30b4258e41e993b5
+Description: Phone-approved LUKS unlock daemon for OpenMediaVault
+
