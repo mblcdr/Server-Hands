@@ -37,6 +37,10 @@ object Signatures {
     fun approveMessage(reqId: ByteArray, clientNonce: ByteArray, enc: ByteArray, ct: ByteArray, aad: ByteArray): ByteArray =
         Codec.signedBytes(Domain.APPROVE, Codec.lp(reqId, clientNonce, enc, Codec.sha256(ct), aad))
 
+    /** The bytes the biometric-bound approval key signs to authorise one run of [script]. */
+    fun scriptApproveMessage(serverPub: ByteArray, deviceId: ByteArray, script: String, challenge: ByteArray): ByteArray =
+        Codec.signedBytes(Domain.SCRIPT_APPROVE, Codec.lp(serverPub, deviceId, script.toByteArray(), challenge))
+
     /** ECDSA P-256 / SHA-256, DER signature, SPKI DER public key. Used for tests and the desktop client. */
     fun deviceVerify(spkiDer: ByteArray, message: ByteArray, sigDer: ByteArray) {
         try {

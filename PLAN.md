@@ -3,7 +3,7 @@
 Phone-approved LUKS unlock for an OpenMediaVault 8 homelab.
 At boot, a tiny host service publishes an unlock request. The user opens an Android app, authenticates with a biometric bound to the Android Keystore, and the app sends the drive passphrases end-to-end encrypted to the server, which unlocks and mounts the drives and starts dependent services.
 
-Status (2026-10-21): Phases 1 to 4 done. Phase 4 was run on the real server: three drives unlock from the phone, the mergerfs pool refreshes, post-unlock scripts run, and the boot delay is cut from ~90 s to ~14 s. Release engineering is in place: signed apt repository and signed Android APK built by GitHub Actions, R8-minified release build, MIT license. Phase 5 (hardening) is partly started (release signing, R8, dependency verification). Toolchains: Rust stable, JDK 17, Gradle 9.8 wrapper, Kotlin 2.4.21. Current version: 0.2.0.
+Status (2026-10-21): Phases 1 to 4 done. Phase 4 was run on the real server: three drives unlock from the phone, the mergerfs pool refreshes, post-unlock scripts run, and the boot delay is cut from ~90 s to ~14 s. Release engineering is in place: signed apt repository and signed Android APK built by GitHub Actions, R8-minified release build, MIT license. Phase 5 (hardening) is partly started (release signing, R8, dependency verification). Toolchains: Rust stable, JDK 17, Gradle 9.8 wrapper, Kotlin 2.4.21. Current version: 0.4.0.
 
 ## Decisions (final)
 
@@ -60,7 +60,7 @@ Residual risk (accepted): root on the live server can read the passphrase during
 1. BIOS: restore power on AC loss, Wake-on-LAN; DHCP reservation for the server.
 2. Install: `sudo apt install ./server-hands_X.Y.Z_amd64.deb`, then `sudo handsctl discover` (writes `/etc/server-hands/config.toml`), `sudo handsctl pair`.
 3. Add phone keyslot to each drive (documented in `docs/homelab-setup.md`).
-4. **Post-unlock scripts instead of gating.** Docker and other services are not gated. `[[script]]` entries in the config run as root (transient unit) after the pool is refreshed: `auto` ones right after the unlock, `manual` ones from the app's "After unlock" card. The phone can only name a configured script. The pool mount is restarted like the OMV mergerfs plugin's "restart pool" (`systemctl restart <mount unit>`).
+4. **Post-unlock scripts instead of gating.** Docker and other services are not gated. `[[script]]` entries in the config run as root (transient unit) after the pool is refreshed: `auto` ones right after the unlock, `manual` ones from the app's "Scripts" card, at any time (a script can opt out of the unlocked-drives requirement with `requires_unlock = false`). The phone can only name a configured script. The pool mount is restarted like the OMV mergerfs plugin's "restart pool" (`systemctl restart <mount unit>`).
 5. `DefaultDeviceTimeoutSec=10s` drop-in for the ~90 s boot delay (documented in `docs/homelab-setup.md`).
 6. Firewall: allow only the handsd port from the LAN.
 7. Reboot test, and a documented recovery procedure (lost phone: unlock via OMV GUI with the human passphrase, `handsctl revoke`, `luksKillSlot`).
@@ -95,7 +95,7 @@ app/         Gradle KMP: core:crypto, core:protocol, core:data, feature:*, andro
 
 - ~~Confirm cause of the ~90 s boot delay~~: confirmed, and fixed by `DefaultDeviceTimeoutSec=10s`.
 - Something (probably OMV's monit filesystem checks) retries the locked drives' mount units every ~20 s to ~80 s after boot, each retry waiting 10 s and logging a timeout. Harmless and after boot is finished; unconfirmed cause (`journalctl -b -o short-monotonic | grep -iE "monit|Mounting /srv"`).
-- Manual scripts have no confirmation or biometric on the phone: one tap runs them (the device key signs without a prompt). Consider a per-script `confirm = true` (dialog) and/or a biometric option, especially for a reboot script.
+- ~~Manual scripts have no confirmation or biometric~~: per-script `requires_confirmation` and `biometric_protection` shipped (biometric = server challenge signed by a separate biometric-bound Keystore key). Open: verify Android key attestation of the approval key on the server (Google root pinning and rotation); instrumented test of `ApprovalKey` on a device with biometrics.
 - Shutdown order: Docker and Samba have no ordering against the drives' mounts, so a reboot can unmount under running containers. The documented mitigation is a stop-first script (stop the drive-dependent compose projects with a long grace period, `sync`, then reboot); an `After=` drop-in is the alternative.
 - Android release APK not yet run on a phone end to end (Compose UI, QR scan, biometric prompt, StrongBox are not covered by the emulator tests). The instrumented Keystore tests skip on the emulator (no biometric/StrongBox).
 - Decide notification story for "a request is waiting" on a LAN-only setup: v1 is open-the-app; optional ntfy/UnifiedPush ping later (content-free).

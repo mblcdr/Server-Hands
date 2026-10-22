@@ -33,6 +33,9 @@ class Listing internal constructor(
 /** Post-unlock scripts. [unlocked] is false until every drive is open; nothing can be started before. */
 class Scripts(val unlocked: Boolean, val scripts: List<ScriptView>)
 
+/** A single-use challenge the server issued for one run of [script]; [message] is what the approval key signs. */
+class ScriptChallenge internal constructor(val script: String, internal val challenge: ByteArray, val expiresAt: Long, val message: ByteArray)
+
 class ApproveResult(val results: List<DriveResult>)
 
 /**
@@ -111,10 +114,40 @@ class ServerClient(
         return Scripts(reply.unlocked, reply.scripts)
     }
 
-    /** Starts the named script (a name the server configured). Returns at once; read the outcome with [scripts]. */
-    fun runScript(name: String) {
+    /**
+     * Registers the biometric-bound approval key ([spki], X.509 DER). The server keeps the first key it sees for
+     * this device; a different one is refused (`conflict`) until the operator resets it.
+     */
+    fun registerApprovalKey(spki: ByteArray) {
         val nonce = freshNonce()
-        val body = WireJson.encodeToString(ScriptRunBody(Codec.b64e(signer.id), Codec.b64e(nonce), nowSecs(), name)).toByteArray()
+        val body = WireJson.encodeToString(ApprovalKeyBody(Codec.b64e(signer.id), Codec.b64e(nonce), nowSecs(), Codec.b64e(spki))).toByteArray()
+        val reply = try { WireJson.decodeFromString<ApprovalKeyReply>(String(signedCall("/v1/device/approval-key", body))) } catch (_: SerializationException) { throw ProtocolException() }
+        checkFresh(reply.clientNonce, nonce)
+    }
+
+    /** Asks the server for the challenge a `biometricProtection` script run must be approved over. */
+    fun scriptChallenge(name: String): ScriptChallenge {
+        val nonce = freshNonce()
+        val body = WireJson.encodeToString(ScriptChallengeBody(Codec.b64e(signer.id), Codec.b64e(nonce), nowSecs(), name)).toByteArray()
+        val reply = try { WireJson.decodeFromString<ScriptChallengeReply>(String(signedCall("/v1/scripts/challenge", body))) } catch (_: SerializationException) { throw ProtocolException() }
+        checkFresh(reply.clientNonce, nonce)
+        val challenge = Codec.b64d(reply.challenge)
+        if (reply.script != name || challenge.size != 32) throw ProtocolException()
+        return ScriptChallenge(name, challenge, reply.expiresAt, Signatures.scriptApproveMessage(pin.serverPub, signer.id, name, challenge))
+    }
+
+    /**
+     * Starts the named script (a name the server configured). Returns at once; read the outcome with [scripts].
+     * For a `biometricProtection` script pass the [challenge] and the approval key's [approvalSig] over its message.
+     */
+    fun runScript(name: String, challenge: ScriptChallenge? = null, approvalSig: ByteArray? = null) {
+        val nonce = freshNonce()
+        val body = WireJson.encodeToString(
+            ScriptRunBody(
+                Codec.b64e(signer.id), Codec.b64e(nonce), nowSecs(), name,
+                challenge?.let { Codec.b64e(it.challenge) }, approvalSig?.let { Codec.b64e(it) },
+            ),
+        ).toByteArray()
         val reply = try { WireJson.decodeFromString<ScriptRunReply>(String(signedCall("/v1/scripts/run", body))) } catch (_: SerializationException) { throw ProtocolException() }
         checkFresh(reply.clientNonce, nonce)
         if (reply.script != name) throw ProtocolException()

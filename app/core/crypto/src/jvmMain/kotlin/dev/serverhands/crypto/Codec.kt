@@ -43,4 +43,5 @@ object Domain {
     val DEVICE_REQUEST = "hands/v1/device-request".toByteArray()
     val APPROVE = "hands/v1/approve".toByteArray()
     val PAIR = "hands/v1/pair".toByteArray()
+    val SCRIPT_APPROVE = "hands/v1/script-approve".toByteArray()
 }

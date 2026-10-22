@@ -5,6 +5,7 @@ import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.serverhands.app.keys.ApprovalKey
 import dev.serverhands.app.keys.KeySecurityException
 import dev.serverhands.app.keys.KeystoreDeviceSigner
 import dev.serverhands.app.keys.VaultKey
@@ -20,6 +21,7 @@ import dev.serverhands.crypto.ProtocolException
 import dev.serverhands.protocol.DriveResult
 import dev.serverhands.protocol.PairingUri
 import dev.serverhands.protocol.RequestView
+import dev.serverhands.protocol.ScriptView
 import dev.serverhands.protocol.Scripts
 import dev.serverhands.protocol.ServerClient
 import dev.serverhands.protocol.ServerException
@@ -73,8 +75,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         is ServerException -> when (e.code) {
             "unauthorized" -> "The server does not accept this phone (not paired, or revoked)."
             "rate_limited" -> "Too many failed attempts. Wait a few minutes."
-            "not_unlocked" -> "Unlock all drives first."
+            "not_unlocked" -> "That script needs the drives unlocked first."
             "busy" -> "That script is already running."
+            "approval_required" -> "The server did not accept the biometric approval. Try again."
+            "conflict" -> "The server already has a different approval key for this phone. On the server run: sudo handsctl reset-approval-key <device-id>"
             "unknown_script" -> "The server no longer has that script. Refresh."
             "expired" -> "That request expired. Refresh."
             "replayed" -> "That request was already used. Refresh."
@@ -127,11 +131,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(requests = listing.requests, scripts = scripts, message = if (listing.requests.isEmpty()) "No drives waiting to be unlocked." else null) }
     }
 
-    /** Starts a post-unlock script the server lists, then polls until it is no longer queued or running. */
-    fun runScript(name: String) = op("Starting script") {
+    /**
+     * Starts a script the server lists, then polls until nothing is queued or running. A `biometricProtection`
+     * script first gets a challenge from the server, which the biometric-bound approval key signs; that prompt
+     * is the confirmation, so the UI shows no extra dialog for it.
+     */
+    fun runScript(activity: FragmentActivity, script: ScriptView) = op("Starting script") {
         val p = _state.value.pairing ?: return@op
         val c = client(p)
-        withContext(Dispatchers.IO) { c.runScript(name) }
+        if (script.biometricProtection) {
+            Biometrics.unavailableReason(activity)?.let { throw KeySecurityException(it) }
+            val challenge = try {
+                withContext(Dispatchers.IO) { c.scriptChallenge(script.name) }
+            } catch (e: ServerException) {
+                if (e.code != "approval_required") throw e
+                // First protected script on this phone: register the biometric-bound key, then ask again.
+                val spki = ApprovalKey.spki(allowSoftware)
+                withContext(Dispatchers.IO) { c.registerApprovalKey(spki) }
+                withContext(Dispatchers.IO) { c.scriptChallenge(script.name) }
+            }
+            val signature = try {
+                ApprovalKey.signature()
+            } catch (_: KeyPermanentlyInvalidatedException) {
+                ApprovalKey.delete()
+                throw KeySecurityException("Biometrics changed, so the approval key was destroyed. On the server run: sudo handsctl reset-approval-key <device-id>, then try again.")
+            }
+            val authorised = Biometrics.authenticate(activity, signature, "Run ${script.label}", p.host)
+            authorised.update(challenge.message)
+            val sig = authorised.sign()
+            withContext(Dispatchers.IO) { c.runScript(script.name, challenge, sig) }
+        } else {
+            withContext(Dispatchers.IO) { c.runScript(script.name) }
+        }
         repeat(120) {
             val s = withContext(Dispatchers.IO) { c.scripts() }
             _state.update { it.copy(scripts = s) }
@@ -208,6 +239,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun forget() {
         _state.value.pairing?.let { KeystoreDeviceSigner.delete(it.keyAlias) }
         VaultKey.delete()
+        ApprovalKey.delete()
         store.clear()
         _state.value = UiState()
     }

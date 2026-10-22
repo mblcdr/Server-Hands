@@ -84,7 +84,7 @@ async fn start() -> Env {
             luks_uuid: UUID.into(),
             label: "Disk-1".into(),
         }],
-        scripts: ["auto1", "man1", "bad"]
+        scripts: ["auto1", "man1", "bad", "free", "bio"]
             .iter()
             .map(|n| ScriptCfg {
                 name: n.to_string(),
@@ -96,6 +96,9 @@ async fn start() -> Env {
                     ScriptMode::Manual
                 },
                 timeout_secs: 5,
+                requires_unlock: *n != "free" && *n != "bio",
+                requires_confirmation: *n == "bio",
+                biometric_protection: *n == "bio",
             })
             .collect(),
         ..Config::default()
@@ -375,4 +378,136 @@ async fn scripts_wait_for_unlock_then_auto_runs_and_manual_is_phone_started() {
         env.host.scripts_run.lock().unwrap().as_slice(),
         ["auto1", "man1", "bad"]
     );
+}
+
+#[tokio::test]
+async fn manual_script_without_requires_unlock_runs_while_drives_are_locked() {
+    let env = start().await;
+    let client = pair(&env, true).await.unwrap();
+
+    assert!(!client.scripts().await.unwrap().unlocked);
+    client.run_script("free").await.unwrap();
+    wait_state(&client, "free", "ok").await;
+    assert_eq!(env.host.scripts_run.lock().unwrap().as_slice(), ["free"]);
+}
+
+#[tokio::test]
+async fn biometric_script_needs_a_registered_key_and_a_fresh_server_challenge() {
+    let env = start().await;
+    let client = pair(&env, true).await.unwrap();
+    let approval = hands_client::Device::generate();
+
+    let views = client.scripts().await.unwrap().scripts;
+    let bio = views.iter().find(|s| s.name == "bio").unwrap();
+    assert!(bio.biometric_protection && bio.requires_confirmation);
+    let free = views.iter().find(|s| s.name == "free").unwrap();
+    assert!(!free.biometric_protection && !free.requires_confirmation);
+
+    // No key registered yet: no challenge, and a plain run is refused.
+    assert!(client
+        .script_challenge("bio")
+        .await
+        .unwrap_err()
+        .contains("403"));
+    assert!(client.run_script("bio").await.unwrap_err().contains("403"));
+    // Challenges exist only for protected scripts.
+    assert!(client
+        .script_challenge("free")
+        .await
+        .unwrap_err()
+        .contains("400"));
+    assert!(client
+        .script_challenge("nope")
+        .await
+        .unwrap_err()
+        .contains("404"));
+
+    client.register_approval_key(&approval).await.unwrap();
+    client.register_approval_key(&approval).await.unwrap(); // same key again is fine
+    let other = hands_client::Device::generate();
+    assert!(client
+        .register_approval_key(&other)
+        .await
+        .unwrap_err()
+        .contains("409"));
+
+    // Still refused without the approval.
+    assert!(client.run_script("bio").await.unwrap_err().contains("403"));
+    assert!(env.host.scripts_run.lock().unwrap().is_empty());
+
+    // The full flow works while the drives are locked (this script does not require the unlock).
+    client.run_script_approved("bio", &approval).await.unwrap();
+    wait_state(&client, "bio", "ok").await;
+    assert_eq!(env.host.scripts_run.lock().unwrap().as_slice(), ["bio"]);
+}
+
+#[tokio::test]
+async fn biometric_approval_is_single_use_and_bound_to_key_script_and_device() {
+    use hands_proto::codec::{b64d, b64e};
+    use hands_proto::sign::script_approve_message;
+
+    let env = start().await;
+    let client = pair(&env, true).await.unwrap();
+    let approval = hands_client::Device::generate();
+    client.register_approval_key(&approval).await.unwrap();
+    let sid: [u8; 32] = b64d(&client.pin.sid).unwrap().try_into().unwrap();
+    let sign = |script: &str, challenge: &str| {
+        let ch: [u8; 32] = b64d(challenge).unwrap().try_into().unwrap();
+        approval.sign(&script_approve_message(
+            &sid,
+            &client.device.id(),
+            script,
+            &ch,
+        ))
+    };
+
+    // A challenge cannot be replayed once used.
+    let c = client.script_challenge("bio").await.unwrap();
+    let sig = sign("bio", &c.challenge);
+    client
+        .run_script_with("bio", Some(&c.challenge), Some(&sig))
+        .await
+        .unwrap();
+    wait_state(&client, "bio", "ok").await;
+    assert!(client
+        .run_script_with("bio", Some(&c.challenge), Some(&sig))
+        .await
+        .unwrap_err()
+        .contains("403"));
+
+    // A signature from a different key is refused, and burns the challenge.
+    let c = client.script_challenge("bio").await.unwrap();
+    let forged = hands_client::Device::generate().sign(&{
+        let ch: [u8; 32] = b64d(&c.challenge).unwrap().try_into().unwrap();
+        script_approve_message(&sid, &client.device.id(), "bio", &ch)
+    });
+    assert!(client
+        .run_script_with("bio", Some(&c.challenge), Some(&forged))
+        .await
+        .unwrap_err()
+        .contains("401"));
+    let good = sign("bio", &c.challenge);
+    assert!(client
+        .run_script_with("bio", Some(&c.challenge), Some(&good))
+        .await
+        .unwrap_err()
+        .contains("403"));
+
+    // A signature over another script name does not verify.
+    let c = client.script_challenge("bio").await.unwrap();
+    let wrong_script = sign("man1", &c.challenge);
+    assert!(client
+        .run_script_with("bio", Some(&c.challenge), Some(&wrong_script))
+        .await
+        .unwrap_err()
+        .contains("401"));
+
+    // A made-up challenge is refused.
+    let made_up = b64e(&[7u8; 32]);
+    let sig = sign("bio", &made_up);
+    assert!(client
+        .run_script_with("bio", Some(&made_up), Some(&sig))
+        .await
+        .unwrap_err()
+        .contains("403"));
 }

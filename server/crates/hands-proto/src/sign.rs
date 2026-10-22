@@ -7,7 +7,7 @@ use p256::pkcs8::DecodePublicKey;
 
 use crate::codec::{b64d, b64e, lp, sha256, signed_bytes};
 use crate::error::{Error, Result};
-use crate::{Envelope, DOMAIN_APPROVE};
+use crate::{Envelope, DOMAIN_APPROVE, DOMAIN_SCRIPT_APPROVE};
 
 pub fn server_sign(sk: &SigningKey, domain: &[u8], body: &[u8]) -> Envelope {
     let sig = sk.sign(&signed_bytes(domain, body));
@@ -45,10 +45,39 @@ pub fn approve_message(
     signed_bytes(DOMAIN_APPROVE, &body)
 }
 
+/// The exact bytes the approval key signs (after a biometric) to authorise one run of one script.
+/// Bound to the server, the device, the script and a challenge the server issued for exactly this.
+pub fn script_approve_message(
+    server_pub: &[u8; 32],
+    device_id: &[u8; 16],
+    script: &str,
+    challenge: &[u8; 32],
+) -> Vec<u8> {
+    signed_bytes(
+        DOMAIN_SCRIPT_APPROVE,
+        &lp(&[server_pub, device_id, script.as_bytes(), challenge]),
+    )
+}
+
 /// Verify a device signature (DER) over `message` with the device's SPKI DER public key.
 pub fn device_verify(spki_der: &[u8], message: &[u8], sig_der: &[u8]) -> Result<()> {
     use p256::ecdsa::signature::Verifier;
     let vk = P256Verifying::from_public_key_der(spki_der).map_err(|_| Error)?;
     let sig = DerSignature::try_from(sig_der).map_err(|_| Error)?;
     vk.verify(message, &sig).map_err(|_| Error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Same bytes as `ScriptApproveMessageTest` in the Kotlin client: both sides must build this identically.
+    #[test]
+    fn script_approve_message_layout_is_pinned() {
+        let m = script_approve_message(&[1; 32], &[2; 16], "bio", &[3; 32]);
+        assert_eq!(
+            crate::codec::hex_encode(&m),
+            "68616e64732f76312f7363726970742d617070726f76650000000020010101010101010101010101010101010101010101010101010101010101010100000010020202020202020202020202020202020000000362696f000000200303030303030303030303030303030303030303030303030303030303030303"
+        );
+    }
 }

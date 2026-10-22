@@ -18,6 +18,8 @@ const USAGE: &str = "usage: handsctl [--config PATH] <command>
   pair [--host HOST]          show a pairing QR, confirm the 6-digit code
   devices                     list paired devices
   revoke <device-id-prefix>   revoke a paired device
+  reset-approval-key <device-id-prefix>
+                              let a phone register a new biometric approval key (e.g. after its biometrics changed)
   add-phone-key <luks-uuid>   add a random keyslot for the phone; prints it once";
 
 fn main() {
@@ -31,6 +33,7 @@ fn main() {
         Some("pair") => pair(&config_path, take_opt(&mut args, "--host")),
         Some("devices") => devices(&config_path),
         Some("revoke") => revoke(&config_path, args.get(1)),
+        Some("reset-approval-key") => reset_approval_key(&config_path, args.get(1)),
         Some("add-phone-key") => add_phone_key(args.get(1)),
         _ => Err(USAGE.to_string()),
     };
@@ -163,10 +166,15 @@ fn devices(config_path: &Path) -> Result<(), String> {
     let r = Control::connect(&load_config(config_path)?)?.call(json!({"cmd": "devices"}))?;
     for d in r["devices"].as_array().into_iter().flatten() {
         println!(
-            "{}  {}  paired {}",
+            "{}  {}  paired {}{}",
             d["id"].as_str().unwrap_or("?"),
             d["name"].as_str().unwrap_or(""),
-            d["created_at"]
+            d["created_at"],
+            if d["approval_spki"].is_string() {
+                "  approval key registered"
+            } else {
+                ""
+            }
         );
     }
     Ok(())
@@ -182,6 +190,18 @@ fn revoke(config_path: &Path, id: Option<&String>) -> Result<(), String> {
         r["name"].as_str().unwrap_or("")
     );
     println!("Also kill the phone keyslot so a copied vault is useless:  cryptsetup luksKillSlot <device> <slot>");
+    Ok(())
+}
+
+fn reset_approval_key(config_path: &Path, id: Option<&String>) -> Result<(), String> {
+    let id = id.ok_or("usage: reset-approval-key <device-id-prefix>")?;
+    let r = Control::connect(&load_config(config_path)?)?
+        .call(json!({"cmd": "reset_approval_key", "id": id}))?;
+    println!(
+        "approval key of {} ({}) cleared; the phone registers a new one on its next protected script",
+        r["device"].as_str().unwrap_or("?"),
+        r["name"].as_str().unwrap_or("")
+    );
     Ok(())
 }
 

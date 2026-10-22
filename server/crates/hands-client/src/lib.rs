@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hands_proto::codec::{b64d, b64e, ct_eq, sha256, signed_bytes, uuid_parse};
 use hands_proto::seal::{encode_plaintext, hpke_aad, hpke_info, sas, seal};
-use hands_proto::sign::{approve_message, device_id, server_verify};
+use hands_proto::sign::{approve_message, device_id, script_approve_message, server_verify};
 use hands_proto::wire::*;
 use hands_proto::{Envelope, DOMAIN_DEVICE_REQUEST, DOMAIN_PAIR, DOMAIN_SERVER_REPLY};
 use http_body_util::{BodyExt, Full};
@@ -93,7 +93,7 @@ impl Device {
     pub fn id(&self) -> [u8; 16] {
         device_id(&self.spki())
     }
-    fn sign(&self, msg: &[u8]) -> Vec<u8> {
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
         let sig: DerSignature = self.key.sign(msg);
         sig.as_bytes().to_vec()
     }
@@ -308,17 +308,81 @@ impl Client {
         serde_json::from_slice(&reply).map_err(|_| "bad scripts reply".into())
     }
 
+    /// Runs a script that needs no biometric approval.
     pub async fn run_script(&self, name: &str) -> Res<ScriptRunReply> {
+        self.run_script_with(name, None, None).await
+    }
+
+    /// Runs a script with an optional challenge and approval signature (both for `biometric_protection`).
+    pub async fn run_script_with(
+        &self,
+        name: &str,
+        challenge: Option<&str>,
+        approval_sig: Option<&[u8]>,
+    ) -> Res<ScriptRunReply> {
         let nonce = Self::fresh_nonce();
         let body = serde_json::to_vec(&ScriptRunBody {
             device_id: b64e(&self.device.id()),
             client_nonce: b64e(&nonce),
             ts: now(),
             script: name.into(),
+            challenge: challenge.map(str::to_string),
+            approval_sig: approval_sig.map(b64e),
         })
         .unwrap();
         let reply = self.signed_call("/v1/scripts/run", &nonce, body).await?;
         serde_json::from_slice(&reply).map_err(|_| "bad run reply".into())
+    }
+
+    /// Registers `approval` (the stand-in for the phone's biometric-bound key) with the server.
+    pub async fn register_approval_key(&self, approval: &Device) -> Res<()> {
+        let nonce = Self::fresh_nonce();
+        let body = serde_json::to_vec(&ApprovalKeyBody {
+            device_id: b64e(&self.device.id()),
+            client_nonce: b64e(&nonce),
+            ts: now(),
+            approval_pub: b64e(&approval.spki()),
+        })
+        .unwrap();
+        self.signed_call("/v1/device/approval-key", &nonce, body)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn script_challenge(&self, name: &str) -> Res<ScriptChallengeReply> {
+        let nonce = Self::fresh_nonce();
+        let body = serde_json::to_vec(&ScriptChallengeBody {
+            device_id: b64e(&self.device.id()),
+            client_nonce: b64e(&nonce),
+            ts: now(),
+            challenge_for: name.into(),
+        })
+        .unwrap();
+        let reply = self
+            .signed_call("/v1/scripts/challenge", &nonce, body)
+            .await?;
+        serde_json::from_slice(&reply).map_err(|_| "bad challenge reply".into())
+    }
+
+    /// The whole biometric-protected flow: challenge, signature by `approval`, run.
+    pub async fn run_script_approved(&self, name: &str, approval: &Device) -> Res<ScriptRunReply> {
+        let c = self.script_challenge(name).await?;
+        let challenge: [u8; 32] = b64d(&c.challenge)
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .ok_or("bad challenge")?;
+        let sid: [u8; 32] = b64d(&self.pin.sid)
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .ok_or("bad sid")?;
+        let sig = approval.sign(&script_approve_message(
+            &sid,
+            &self.device.id(),
+            name,
+            &challenge,
+        ));
+        self.run_script_with(name, Some(&c.challenge), Some(&sig))
+            .await
     }
 
     /// Seals the passphrases to the request's ephemeral key and approves. `drives` need not be sorted.

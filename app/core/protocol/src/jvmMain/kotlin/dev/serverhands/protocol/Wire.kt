@@ -42,7 +42,36 @@ internal class ScriptRunBody(
     @SerialName("client_nonce") val clientNonce: String,
     val ts: Long,
     val script: String,
+    val challenge: String? = null,
+    @SerialName("approval_sig") val approvalSig: String? = null,
 )
+
+@Serializable
+internal class ScriptChallengeBody(
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("client_nonce") val clientNonce: String,
+    val ts: Long,
+    @SerialName("challenge_for") val challengeFor: String,
+)
+
+@Serializable
+internal class ScriptChallengeReply(
+    @SerialName("client_nonce") val clientNonce: String,
+    val script: String,
+    val challenge: String,
+    @SerialName("expires_at") val expiresAt: Long,
+)
+
+@Serializable
+internal class ApprovalKeyBody(
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("client_nonce") val clientNonce: String,
+    val ts: Long,
+    @SerialName("approval_pub") val approvalPub: String,
+)
+
+@Serializable
+internal class ApprovalKeyReply(@SerialName("client_nonce") val clientNonce: String)
 
 /** `mode`: auto | manual. `state`: idle | queued | running | ok | failed. `finishedAt` is unix seconds, 0 if never. */
 @Serializable
@@ -52,6 +81,10 @@ class ScriptView(
     val mode: String,
     val state: String,
     @SerialName("finished_at") val finishedAt: Long,
+    /** The app asks before running it (unless [biometricProtection] makes the biometric prompt the confirmation). */
+    @SerialName("requires_confirmation") val requiresConfirmation: Boolean = false,
+    /** Running it needs a biometric signature over a server challenge. */
+    @SerialName("biometric_protection") val biometricProtection: Boolean = false,
 ) {
     val busy: Boolean get() = state == "queued" || state == "running"
 }

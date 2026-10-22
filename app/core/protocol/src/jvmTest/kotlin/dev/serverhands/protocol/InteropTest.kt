@@ -57,7 +57,7 @@ class InteropTest {
 
         val before = client.scripts()
         assertTrue(!before.unlocked)
-        val demo = before.scripts.single()
+        val demo = before.scripts.single { it.name == "demo" }
         assertEquals(listOf("demo", "Demo containers", "manual", "idle"), listOf(demo.name, demo.label, demo.mode, demo.state))
         assertEquals(409, assertFailsWith<ServerException> { client.runScript("demo") }.status)
         assertEquals(404, assertFailsWith<ServerException> { client.runScript("nope") }.status)
@@ -67,10 +67,41 @@ class InteropTest {
         assertTrue(client.scripts().unlocked)
         client.runScript("demo")
         repeat(100) {
-            if (client.scripts().scripts.single().state == "ok") return
+            if (client.scripts().scripts.single { it.name == "demo" }.state == "ok") return
             Thread.sleep(50)
         }
         throw AssertionError("script never finished")
+    }
+
+    @Test
+    fun biometricScriptNeedsRegisteredKeyAndServerChallenge() {
+        val (pin, token) = startServer()
+        val client = ServerClient(pin, SoftSigner())
+        client.pair(token, "kotlin test") {}
+        val secure = client.scripts().scripts.single { it.name == "secure" }
+        assertTrue(secure.biometricProtection && secure.requiresConfirmation)
+
+        // The app-side approval key stands in as a software key here; on Android it is biometric-bound.
+        val approval = SoftSigner()
+        assertEquals(403, assertFailsWith<ServerException> { client.scriptChallenge("secure") }.status)
+        assertEquals(403, assertFailsWith<ServerException> { client.runScript("secure") }.status)
+
+        client.registerApprovalKey(approval.spki)
+        client.registerApprovalKey(approval.spki)
+        assertEquals(409, assertFailsWith<ServerException> { client.registerApprovalKey(SoftSigner().spki) }.status)
+
+        val challenge = client.scriptChallenge("secure")
+        val sig = approval.sign(challenge.message)
+        client.runScript("secure", challenge, sig)
+        var tries = 0
+        while (client.scripts().scripts.single { it.name == "secure" }.state != "ok" && tries++ < 100) Thread.sleep(50)
+        assertEquals("ok", client.scripts().scripts.single { it.name == "secure" }.state)
+
+        // single use
+        assertEquals(403, assertFailsWith<ServerException> { client.runScript("secure", challenge, sig) }.status)
+        // wrong key
+        val c2 = client.scriptChallenge("secure")
+        assertEquals(401, assertFailsWith<ServerException> { client.runScript("secure", c2, SoftSigner().sign(c2.message)) }.status)
     }
 
     @Test

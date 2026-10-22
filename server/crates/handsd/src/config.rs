@@ -34,7 +34,8 @@ pub enum ScriptMode {
     Manual,
 }
 
-/// A script run as root, outside the daemon's sandbox, after the drives are unlocked.
+/// A script run as root, outside the daemon's sandbox: `auto` ones after the drives are unlocked, `manual` ones
+/// whenever the phone asks (after the unlock unless `requires_unlock = false`).
 /// The phone can only name a script from this list; it never supplies a path or arguments.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,6 +51,17 @@ pub struct ScriptCfg {
     pub mode: ScriptMode,
     #[serde(default = "default_script_timeout")]
     pub timeout_secs: u64,
+    /// When true (default) a manual script is refused until every drive is unlocked. Set false for scripts that
+    /// are useful on their own (status checks, restarts, reboots). `auto` scripts always wait for the unlock.
+    #[serde(default = "default_true")]
+    pub requires_unlock: bool,
+    /// The app asks "Run X?" first. Not enforceable by the server; skipped when `biometric_protection` is on.
+    #[serde(default)]
+    pub requires_confirmation: bool,
+    /// Starting the script needs a fresh biometric on the phone, proven to the server with a signature over a
+    /// server-issued challenge. Enforced by the server.
+    #[serde(default)]
+    pub biometric_protection: bool,
 }
 
 impl ScriptCfg {
@@ -60,6 +72,10 @@ impl ScriptCfg {
 
 fn default_script_timeout() -> u64 {
     300
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -42,6 +42,7 @@ import dev.serverhands.app.AppViewModel
 import dev.serverhands.app.UiState
 import dev.serverhands.protocol.DriveInfo
 import dev.serverhands.protocol.RequestView
+import dev.serverhands.protocol.ScriptView
 import dev.serverhands.protocol.Scripts
 import java.nio.CharBuffer
 
@@ -49,6 +50,7 @@ import java.nio.CharBuffer
 fun HomeScreen(vm: AppViewModel, activity: FragmentActivity) {
     val ui by vm.state.collectAsStateWithLifecycle()
     var enrolling by remember { mutableStateOf<RequestView?>(null) }
+    var confirming by remember { mutableStateOf<ScriptView?>(null) }
 
     Scaffold { pad ->
         LazyColumn(
@@ -82,11 +84,26 @@ fun HomeScreen(vm: AppViewModel, activity: FragmentActivity) {
                         onUnlock = { vm.unlock(activity, r) }, onEnroll = { enrolling = r })
                 }
                 ui.scripts?.takeIf { it.scripts.isNotEmpty() }?.let { sc ->
-                    item { ScriptsCard(sc, ui.busy == null, vm::runScript) }
+                    item {
+                        ScriptsCard(sc, ui.busy == null) { s ->
+                            // With biometric protection the biometric prompt is the confirmation: no extra dialog.
+                            if (s.requiresConfirmation && !s.biometricProtection) confirming = s else vm.runScript(activity, s)
+                        }
+                    }
                 }
                 item { TextButton(onClick = vm::forget, enabled = ui.busy == null) { Text("Forget this server") } }
             }
         }
+    }
+
+    confirming?.let { s ->
+        AlertDialog(
+            onDismissRequest = { confirming = null },
+            title = { Text("Run ${s.label}?") },
+            text = { Text("This starts the script on ${ui.pairing?.host ?: "the server"} right away.") },
+            confirmButton = { TextButton(onClick = { confirming = null; vm.runScript(activity, s) }) { Text("Run") } },
+            dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
+        )
     }
 
     enrolling?.let { req ->
@@ -118,10 +135,10 @@ fun HomeScreen(vm: AppViewModel, activity: FragmentActivity) {
 }
 
 @Composable
-private fun ScriptsCard(scripts: Scripts, enabled: Boolean, onRun: (String) -> Unit) = Card(Modifier.fillMaxWidth()) {
+private fun ScriptsCard(scripts: Scripts, enabled: Boolean, onRun: (ScriptView) -> Unit) = Card(Modifier.fillMaxWidth()) {
     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("After unlock", style = MaterialTheme.typography.titleMedium)
-        if (!scripts.unlocked) Text("Available once all drives are unlocked.", style = MaterialTheme.typography.bodySmall)
+        Text("Scripts", style = MaterialTheme.typography.titleMedium)
+        if (!scripts.unlocked) Text("Drives are locked. Scripts that need the data are refused until they are unlocked.", style = MaterialTheme.typography.bodySmall)
         scripts.scripts.forEach { s ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -130,12 +147,12 @@ private fun ScriptsCard(scripts: Scripts, enabled: Boolean, onRun: (String) -> U
                         (if (s.mode == "auto") "runs automatically" else "manual") + ": " + when (s.state) {
                             "idle" -> "not run yet"; "queued" -> "waiting"; "running" -> "running"
                             "ok" -> "finished"; else -> "failed"
-                        },
+                        } + if (s.biometricProtection) " (needs biometric)" else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = if (s.state == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                OutlinedButton(onClick = { onRun(s.name) }, enabled = enabled && scripts.unlocked && !s.busy) { Text(if (s.state == "failed") "Retry" else "Run") }
+                OutlinedButton(onClick = { onRun(s) }, enabled = enabled && !s.busy) { Text(if (s.state == "failed") "Retry" else "Run") }
             }
         }
     }

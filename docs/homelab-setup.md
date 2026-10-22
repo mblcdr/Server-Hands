@@ -22,8 +22,11 @@
      path = "/etc/server-hands/scripts/media.sh"
      mode = "auto"      # runs right after the unlock; "manual" = only when you tap Run in the app
      ```
+     Manual scripts do not have to be about the unlock: add `requires_unlock = false` to one (a status check, a service restart, a reboot) and the app can run it at any time, even while the drives are locked. Without it a manual script is refused until every drive is unlocked.
+
+     For dangerous scripts (a reboot, say) add `requires_confirmation = true` (the app asks "Run X?") or `biometric_protection = true` (the phone must produce a fresh fingerprint/face, which the server checks with a challenge it issues; the biometric prompt then replaces the dialog). The first protected run registers the phone's approval key automatically. If the phone's biometrics change, the key is destroyed; run `sudo handsctl reset-approval-key <device-id>` (ids from `handsctl devices`) and the phone registers a new one on its next protected run.
      Scripts run as root in a transient unit, in the order listed, after the pool is refreshed. A non-zero exit or the `timeout_secs` limit (default 300) shows as "failed" in the app. Output: `journalctl -u server-hands-script-media`.
-   - Test it without a reboot: `sudo systemctl restart handsd`, unlock (or, with the drives already open, handsd runs `auto` scripts at startup), then check the app's "After unlock" card.
+   - Test it without a reboot: `sudo systemctl restart handsd`, unlock (or, with the drives already open, handsd runs `auto` scripts at startup), then check the app's "Scripts" card.
    - The mergerfs pool: list its mount unit in `mount_units` (`systemd-escape --path --suffix=mount /srv/mergerfs/Pool` prints the name, e.g. `srv-mergerfs-Pool.mount`). After the drives are mounted handsd runs `systemctl restart` on it, exactly as the OMV mergerfs plugin's "restart pool" action does. If something holds the pool open (a running container or Samba), the restart can fail with "target is busy"; keep those out of boot, or start them from a script.
    - Optional hard gating of a systemd service (the old approach): `sudo install -D -m644 /usr/share/server-hands/gated-service.conf /etc/systemd/system/<unit>.d/server-hands.conf`, add the unit to `service_units`.
 6. `sudo systemctl enable --now handsd.socket handsd.service`, then run `systemd-analyze security handsd.service` and expect an exposure of 3.0 or lower.

@@ -44,6 +44,7 @@ pub const DOMAIN_SERVER_REPLY: &[u8] = b"hands/v1/server-reply";
 pub const DOMAIN_DEVICE_REQUEST: &[u8] = b"hands/v1/device-request";
 pub const DOMAIN_APPROVE: &[u8] = b"hands/v1/approve";
 pub const DOMAIN_PAIR: &[u8] = b"hands/v1/pair";
+pub const DOMAIN_SCRIPT_APPROVE: &[u8] = b"hands/v1/script-approve";
 
 #[cfg(test)]
 mod tests {

@@ -6,7 +6,7 @@ The server boots with its encrypted drives locked. You open the Android app, con
 
 LAN only: no cloud, no relay, no account.
 
-Status: version 0.2.0. Verified on a real OpenMediaVault 8 server with three LUKS drives, a mergerfs pool and a real phone. See [PLAN.md](PLAN.md) for decisions and open items.
+Status: version 0.4.0. Verified on a real OpenMediaVault 8 server with three LUKS drives, a mergerfs pool and a real phone. See [PLAN.md](PLAN.md) for decisions and open items.
 
 ## How it works
 
@@ -16,7 +16,7 @@ phone        ── verifies the pinned server identity, shows the waiting drive
              ── biometric releases the passphrases from the Keystore vault
              ── HPKE-seals them to the request's one-time key, signs with the device key, sends
 handsd       ── unlocks via libcryptsetup, mounts through fstab, restarts the mergerfs pool,
-                runs `auto` scripts; `manual` scripts appear in the app
+                runs `auto` scripts; `manual` scripts appear in the app and can be run from it at any time
 ```
 
 Security properties in short: pinned TLS plus a pinned Ed25519 server identity (no CA, no trust on first use after pairing), per-request ephemeral keys held in RAM only, single-use nonces, per-use biometric on the phone, a dedicated revocable LUKS keyslot for the phone, no secrets in logs or argv. See [docs/threat-model.md](docs/threat-model.md) and [docs/protocol.md](docs/protocol.md).
@@ -71,9 +71,12 @@ name = "media"
 label = "Media containers"
 path = "/etc/server-hands/scripts/media.sh"
 mode = "auto"          # runs right after the unlock; "manual" shows a Run button in the app
+# requires_unlock = false   # manual only: allow running while the drives are still locked (default true)
+# requires_confirmation = true   # the app asks "Run media?" first
+# biometric_protection = true    # needs a fresh fingerprint/face, checked by the server (replaces the dialog)
 ```
 
-Scripts run as root in a transient systemd unit (`journalctl -u server-hands-script-media`). They must be owned by root and not writable by others. The phone can only start scripts named in this file. An example is installed at `/usr/share/server-hands/post-unlock-example.sh`. A script can also do something other than start containers, for example a reboot (stop the drive-dependent containers first, then `systemctl --no-block reboot`); note that anyone holding the unlocked phone can start any listed script with one tap.
+Scripts run as root in a transient systemd unit (`journalctl -u server-hands-script-media`). They must be owned by root and not writable by others. The phone can only start scripts named in this file. An example is installed at `/usr/share/server-hands/post-unlock-example.sh`. A script can also do something other than start containers, for example a reboot (stop the drive-dependent containers first, then `systemctl --no-block reboot`); note that anyone holding the unlocked phone can start a listed script with one tap unless it sets `requires_confirmation` (a dialog) or `biometric_protection` (a biometric the server verifies; the first protected run registers the phone's approval key, and `sudo handsctl reset-approval-key <device-id>` lets a phone register a new one, for example after its biometrics changed).
 
 ## Build and test
 

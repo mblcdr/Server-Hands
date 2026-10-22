@@ -143,6 +143,12 @@ async fn control_conn(ctx: Arc<Ctx>, stream: UnixStream) {
                 Ok(d) => json!({ "ok": true, "revoked": d.id, "name": d.name }),
                 Err(e) => json!({ "ok": false, "error": e }),
             },
+            "reset_approval_key" => {
+                match ctx.reset_approval_key(cmd["id"].as_str().unwrap_or("")) {
+                    Ok(d) => json!({ "ok": true, "device": d.id, "name": d.name }),
+                    Err(e) => json!({ "ok": false, "error": e }),
+                }
+            }
             "pair_start" => {
                 let (token, rx) = ctx.pair_start();
                 presented = Some(rx);

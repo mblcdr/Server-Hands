@@ -5,6 +5,7 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.security.Signature
 import javax.crypto.Cipher
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -29,14 +30,21 @@ object Biometrics {
      * has authorised for exactly this one operation.
      */
     suspend fun authenticate(activity: FragmentActivity, cipher: Cipher, title: String, subtitle: String): Cipher =
+        authenticate(activity, BiometricPrompt.CryptoObject(cipher), title, subtitle).cipher ?: throw AuthFailed("no cipher")
+
+    /** Same for a signature: the returned one is authorised to sign exactly once. */
+    suspend fun authenticate(activity: FragmentActivity, signature: Signature, title: String, subtitle: String): Signature =
+        authenticate(activity, BiometricPrompt.CryptoObject(signature), title, subtitle).signature ?: throw AuthFailed("no signature")
+
+    private suspend fun authenticate(activity: FragmentActivity, crypto: BiometricPrompt.CryptoObject, title: String, subtitle: String): BiometricPrompt.CryptoObject =
         suspendCancellableCoroutine { cont ->
             val prompt = BiometricPrompt(
                 activity,
                 ContextCompat.getMainExecutor(activity),
                 object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                        val c = result.cryptoObject?.cipher
-                        if (c != null) cont.resume(c) else cont.resumeWithException(AuthFailed("no cipher"))
+                        val c = result.cryptoObject
+                        if (c != null) cont.resume(c) else cont.resumeWithException(AuthFailed("no crypto object"))
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -53,7 +61,7 @@ object Biometrics {
                 .setAllowedAuthenticators(STRONG)
                 .setConfirmationRequired(true)
                 .build()
-            prompt.authenticate(info, BiometricPrompt.CryptoObject(cipher))
+            prompt.authenticate(info, crypto)
             cont.invokeOnCancellation { prompt.cancelAuthentication() }
         }
 }

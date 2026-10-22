@@ -96,6 +96,10 @@ pub struct ScriptView {
     pub mode: String,
     pub state: String,
     pub finished_at: u64,
+    /// The app asks "Run X?" before starting it (skipped when `biometric_protection` is on: the prompt is the confirmation).
+    pub requires_confirmation: bool,
+    /// Starting it needs a fresh biometric signature over a server challenge; the server enforces this.
+    pub biometric_protection: bool,
 }
 
 /// `POST /v1/scripts/list` takes a device-signed [`ListBody`] envelope and answers with this.
@@ -104,7 +108,7 @@ pub struct ScriptView {
 pub struct ScriptsReply {
     pub client_nonce: String,
     pub server_time: u64,
-    /// True once every configured drive is unlocked; scripts cannot be started before.
+    /// True once every configured drive is unlocked; scripts with `requires_unlock` cannot be started before.
     pub unlocked: bool,
     pub scripts: Vec<ScriptView>,
 }
@@ -117,10 +121,54 @@ pub struct ScriptRunBody {
     pub client_nonce: String,
     pub ts: u64,
     pub script: String,
+    /// Both set for a `biometric_protection` script: the challenge from `scripts/challenge` and the
+    /// approval key's signature over [`crate::sign::script_approve_message`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub challenge: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_sig: Option<String>,
+}
+
+/// `POST /v1/scripts/challenge`, body of the device-signed envelope. The differently named field keeps it
+/// from being accepted as a run request.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptChallengeBody {
+    pub device_id: String,
+    pub client_nonce: String,
+    pub ts: u64,
+    pub challenge_for: String,
+}
+
+/// Body of the server-signed challenge reply. Single use, tied to this device and script.
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptChallengeReply {
+    pub client_nonce: String,
+    pub script: String,
+    pub challenge: String,
+    pub expires_at: u64,
+}
+
+/// `POST /v1/device/approval-key`, body of the device-signed envelope. Registers the biometric-bound key
+/// (SPKI DER) once; the same key again is accepted, a different one is refused until the operator resets it.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalKeyBody {
+    pub device_id: String,
+    pub client_nonce: String,
+    pub ts: u64,
+    pub approval_pub: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalKeyReply {
+    pub client_nonce: String,
 }
 
 /// Body of the server-signed run reply. The script runs in the background; poll the list for the outcome.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptRunReply {
     pub client_nonce: String,

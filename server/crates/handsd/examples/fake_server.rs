@@ -63,13 +63,28 @@ async fn main() {
             luks_uuid: UUID.into(),
             label: "Disk-1".into(),
         }],
-        scripts: vec![ScriptCfg {
-            name: "demo".into(),
-            label: Some("Demo containers".into()),
-            path: "/bin/true".into(),
-            mode: ScriptMode::Manual,
-            timeout_secs: 5,
-        }],
+        scripts: vec![
+            ScriptCfg {
+                name: "demo".into(),
+                label: Some("Demo containers".into()),
+                path: "/bin/true".into(),
+                mode: ScriptMode::Manual,
+                timeout_secs: 5,
+                requires_unlock: true,
+                requires_confirmation: false,
+                biometric_protection: false,
+            },
+            ScriptCfg {
+                name: "secure".into(),
+                label: Some("Reboot".into()),
+                path: "/bin/true".into(),
+                mode: ScriptMode::Manual,
+                timeout_secs: 5,
+                requires_unlock: false,
+                requires_confirmation: true,
+                biometric_protection: true,
+            },
+        ],
         ..Config::default()
     };
     let host = Arc::new(Fake(

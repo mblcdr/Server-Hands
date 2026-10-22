@@ -177,7 +177,7 @@ pub fn run_script(s: &ScriptCfg, trigger: &str) -> bool {
             "--wait",
             "--collect",
             &format!("--unit=server-hands-script-{}", s.name),
-            &format!("--description=Server Hands post-unlock script {}", s.name),
+            &format!("--description=Server Hands script {}", s.name),
             &format!("--property=RuntimeMaxSec={}", s.timeout_secs),
             &format!("--setenv=SERVER_HANDS_TRIGGER={trigger}"),
             "--",

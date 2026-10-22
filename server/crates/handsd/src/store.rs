@@ -18,6 +18,9 @@ pub struct DeviceRecord {
     pub spki: String,
     pub name: String,
     pub created_at: u64,
+    /// SPKI of the biometric-bound approval key, once the phone registered one. Lost on re-pairing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_spki: Option<String>,
 }
 
 impl DeviceRecord {
@@ -142,5 +145,6 @@ pub fn new_device_record(id: &[u8; 16], spki: &[u8], name: &str, now: u64) -> De
         spki: b64e(spki),
         name: name.to_string(),
         created_at: now,
+        approval_spki: None,
     }
 }

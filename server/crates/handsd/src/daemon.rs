@@ -8,7 +8,7 @@ use hands_proto::codec::{
     b64d, b64e, ct_eq, hex_decode, hex_encode, signed_bytes, uuid_format, uuid_parse,
 };
 use hands_proto::seal::sas;
-use hands_proto::sign::{device_id, device_verify, server_sign};
+use hands_proto::sign::{device_id, device_verify, script_approve_message, server_sign};
 use hands_proto::wire::*;
 use hands_proto::{Envelope, DOMAIN_DEVICE_REQUEST, DOMAIN_PAIR, DOMAIN_SERVER_REPLY};
 use p256::pkcs8::DecodePublicKey;
@@ -22,6 +22,8 @@ use crate::state::{Refusal, State, SystemClock};
 use crate::store::{new_device_record, DeviceRecord, Store};
 
 pub const PAIR_TOKEN_TTL: Duration = Duration::from_secs(300);
+const SCRIPT_CHALLENGE_TTL: Duration = Duration::from_secs(60);
+const MAX_SCRIPT_CHALLENGES: usize = 64;
 const PAIR_MAX_BAD_TOKENS: u8 = 5;
 
 pub struct Presented {
@@ -61,6 +63,14 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// A challenge issued for one device to approve one script. Single use.
+struct ScriptChallenge {
+    challenge: [u8; 32],
+    device: [u8; 16],
+    script: String,
+    expires: Instant,
+}
+
 struct PairSession {
     token: [u8; 32],
     expires: Instant,
@@ -81,6 +91,7 @@ pub struct Ctx {
     unlock_gate: tokio::sync::Mutex<()>,
     /// script name -> (state, unix time it finished)
     scripts: Mutex<std::collections::HashMap<String, (RunState, u64)>>,
+    challenges: Mutex<Vec<ScriptChallenge>>,
 }
 
 pub type Reply = (u16, String);
@@ -92,7 +103,8 @@ fn err(code: &str) -> Reply {
         "expired" => 410,
         "rate_limited" => 429,
         "unknown_script" => 404,
-        "not_unlocked" | "busy" => 409,
+        "approval_required" => 403,
+        "not_unlocked" | "busy" | "conflict" => 409,
         "internal" => 500,
         _ => 400,
     };
@@ -134,6 +146,7 @@ impl Ctx {
             pairing: Mutex::new(None),
             unlock_gate: tokio::sync::Mutex::new(()),
             scripts: Mutex::new(Default::default()),
+            challenges: Mutex::new(Vec::new()),
         })
     }
 
@@ -174,7 +187,9 @@ impl Ctx {
             "/v1/pair" => self.pair(body).await,
             "/v1/requests/list" => self.list(body),
             "/v1/scripts/list" => self.scripts_list(body),
+            "/v1/scripts/challenge" => self.scripts_challenge(body),
             "/v1/scripts/run" => self.scripts_run(body),
+            "/v1/device/approval-key" => self.register_approval_key(body),
             p => match p
                 .strip_prefix("/v1/requests/")
                 .and_then(|r| r.strip_suffix("/approve"))
@@ -303,6 +318,25 @@ impl Ctx {
             self.state.lock().unwrap().revoke_device(&id);
         }
         Ok(rec)
+    }
+
+    /// Forgets a device's approval key so its phone can register a new one (e.g. after its biometrics changed).
+    pub fn reset_approval_key(&self, id_hex: &str) -> Result<DeviceRecord, String> {
+        let mut devices = self.devices.lock().unwrap();
+        let matches: Vec<usize> = devices
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !id_hex.is_empty() && d.id.starts_with(id_hex))
+            .map(|(i, _)| i)
+            .collect();
+        let [i] = matches[..] else {
+            return Err("no unique device matches".into());
+        };
+        devices[i].approval_spki = None;
+        self.store
+            .save_devices(&devices)
+            .map_err(|e| e.to_string())?;
+        Ok(devices[i].clone())
     }
 
     pub fn pending_count(&self) -> usize {
@@ -495,6 +529,8 @@ impl Ctx {
                     .into(),
                     state: state.as_str().into(),
                     finished_at,
+                    requires_confirmation: s.requires_confirmation,
+                    biometric_protection: s.biometric_protection,
                 }
             })
             .collect()
@@ -559,6 +595,161 @@ impl Ctx {
         self.sign_reply(DOMAIN_SERVER_REPLY, &reply)
     }
 
+    /// Registers the phone's biometric-bound approval key. The first key sticks: the same key again is fine,
+    /// a different one needs `handsctl reset-approval-key` (or re-pairing), so a stolen unlocked phone
+    /// cannot swap in a key that skips the biometric.
+    fn register_approval_key(&self, body: &[u8]) -> Reply {
+        let claimed = match self
+            .authenticate::<ApprovalKeyBody>(body, |b| (&b.device_id, &b.client_nonce, b.ts))
+        {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        let Ok(spki) = b64d(&claimed.approval_pub) else {
+            return err("bad_request");
+        };
+        if p256::ecdsa::VerifyingKey::from_public_key_der(&spki).is_err() {
+            return err("bad_request");
+        }
+        let Some(dev) = b64d(&claimed.device_id)
+            .ok()
+            .and_then(|v| <[u8; 16]>::try_from(v).ok())
+        else {
+            return err("bad_request");
+        };
+        let mut devices = self.devices.lock().unwrap();
+        let Some(rec) = devices.iter_mut().find(|d| d.id_bytes() == Some(dev)) else {
+            return err("unauthorized");
+        };
+        match rec.approval_spki.as_deref().and_then(|s| b64d(s).ok()) {
+            Some(existing) if !ct_eq(&existing, &spki) => return err("conflict"),
+            Some(_) => {}
+            None => {
+                rec.approval_spki = Some(b64e(&spki));
+                if self.store.save_devices(&devices).is_err() {
+                    return err("internal");
+                }
+            }
+        }
+        drop(devices);
+        self.sign_reply(
+            DOMAIN_SERVER_REPLY,
+            &ApprovalKeyReply {
+                client_nonce: claimed.client_nonce,
+            },
+        )
+    }
+
+    fn approval_spki(&self, dev: &[u8; 16]) -> Option<Vec<u8>> {
+        self.devices
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|d| d.id_bytes() == Some(*dev))
+            .and_then(|d| d.approval_spki.as_deref().and_then(|s| b64d(s).ok()))
+    }
+
+    /// Issues the single-use challenge a `biometric_protection` script run must be signed over.
+    fn scripts_challenge(&self, body: &[u8]) -> Reply {
+        let claimed = match self
+            .authenticate::<ScriptChallengeBody>(body, |b| (&b.device_id, &b.client_nonce, b.ts))
+        {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        let Some(script) = self
+            .cfg
+            .scripts
+            .iter()
+            .find(|s| s.name == claimed.challenge_for)
+        else {
+            return err("unknown_script");
+        };
+        let Some(dev) = b64d(&claimed.device_id)
+            .ok()
+            .and_then(|v| <[u8; 16]>::try_from(v).ok())
+        else {
+            return err("bad_request");
+        };
+        if !script.biometric_protection {
+            return err("bad_request");
+        }
+        // Refuse early so the user is not asked for a biometric that could not start the script anyway.
+        if script.requires_unlock && !self.unlocked() {
+            return err("not_unlocked");
+        }
+        if self.approval_spki(&dev).is_none() {
+            return err("approval_required");
+        }
+        let mut challenge = [0u8; 32];
+        OsRng.fill_bytes(&mut challenge);
+        let expires = Instant::now() + SCRIPT_CHALLENGE_TTL;
+        {
+            let mut all = self.challenges.lock().unwrap();
+            let now = Instant::now();
+            all.retain(|c| c.expires > now && !(c.device == dev && c.script == script.name));
+            if all.len() >= MAX_SCRIPT_CHALLENGES {
+                return err("rate_limited");
+            }
+            all.push(ScriptChallenge {
+                challenge,
+                device: dev,
+                script: script.name.clone(),
+                expires,
+            });
+        }
+        self.sign_reply(
+            DOMAIN_SERVER_REPLY,
+            &ScriptChallengeReply {
+                client_nonce: claimed.client_nonce,
+                script: script.name.clone(),
+                challenge: b64e(&challenge),
+                expires_at: unix_now() + SCRIPT_CHALLENGE_TTL.as_secs(),
+            },
+        )
+    }
+
+    /// Checks the approval for a `biometric_protection` script and burns the challenge, pass or fail.
+    fn check_script_approval(
+        &self,
+        dev: &[u8; 16],
+        script: &str,
+        run: &ScriptRunBody,
+    ) -> Result<(), Reply> {
+        let (Some(challenge), Some(sig)) = (
+            run.challenge
+                .as_deref()
+                .and_then(|c| b64d(c).ok())
+                .and_then(|c| <[u8; 32]>::try_from(c).ok()),
+            run.approval_sig.as_deref().and_then(|s| b64d(s).ok()),
+        ) else {
+            return Err(err("approval_required"));
+        };
+        let Some(spki) = self.approval_spki(dev) else {
+            return Err(err("approval_required"));
+        };
+        let found = {
+            let mut all = self.challenges.lock().unwrap();
+            let now = Instant::now();
+            let pos = all.iter().position(|c| {
+                ct_eq(&c.challenge, &challenge) && c.device == *dev && c.script == script
+            });
+            let taken = pos.map(|i| all.swap_remove(i));
+            all.retain(|c| c.expires > now);
+            taken
+        };
+        match found {
+            None => return Err(err("approval_required")),
+            Some(c) if c.expires <= Instant::now() => return Err(err("expired")),
+            Some(_) => {}
+        }
+        let msg = script_approve_message(&self.server_pub, dev, script, &challenge);
+        if device_verify(&spki, &msg, &sig).is_err() {
+            return Err(err("unauthorized"));
+        }
+        Ok(())
+    }
+
     fn scripts_run(self: &Arc<Self>, body: &[u8]) -> Reply {
         let claimed = match self
             .authenticate::<ScriptRunBody>(body, |b| (&b.device_id, &b.client_nonce, b.ts))
@@ -569,8 +760,19 @@ impl Ctx {
         let Some(script) = self.cfg.scripts.iter().find(|s| s.name == claimed.script) else {
             return err("unknown_script");
         };
-        if !self.unlocked() {
+        if script.requires_unlock && !self.unlocked() {
             return err("not_unlocked");
+        }
+        if script.biometric_protection {
+            let Some(dev) = b64d(&claimed.device_id)
+                .ok()
+                .and_then(|v| <[u8; 16]>::try_from(v).ok())
+            else {
+                return err("bad_request");
+            };
+            if let Err(r) = self.check_script_approval(&dev, &script.name, &claimed) {
+                return r;
+            }
         }
         if !self.claim_script(&script.name) {
             return err("busy");

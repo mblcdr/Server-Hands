@@ -1,6 +1,6 @@
 # Installing from the apt repository
 
-The GitHub Actions workflow (`.github/workflows/deb.yml`) builds the package in a Debian 13 container on every push and pull request and uploads it as a workflow artifact (`server-hands-deb`, plus `SHA256SUMS`; `hands-client-linux-amd64` is the test client). Pushing a tag `v*` (for example `v0.2.0`) additionally publishes the package to a signed apt repository served from GitHub Pages, so the server can install and upgrade it with plain `apt`.
+The GitHub Actions workflow (`.github/workflows/deb.yml`) builds the package in a Debian 13 container on every push and pull request and uploads it as a workflow artifact (`server-hands-deb`, plus `SHA256SUMS`; `hands-client-linux-amd64` is the test client). Pushing a tag `v*` (for example `v0.4.0`) additionally publishes the package to a signed apt repository served from GitHub Pages, so the server can install and upgrade it with plain `apt`.
 
 ## Install on the server
 
@@ -28,9 +28,9 @@ Before trusting the key, compare its fingerprint with the one you recorded when 
    Store the private key only as a repository secret, then delete the file and the temporary `GNUPGHOME`.
 2. **Secrets** (GitHub: Settings, Secrets and variables, Actions): `APT_GPG_PRIVATE_KEY` = the contents of `apt-signing-key.asc`. Add `APT_GPG_PASSPHRASE` only if you gave the key a passphrase.
 3. **Pages.** Settings, Pages, Source: "Deploy from a branch", branch `gh-pages`, folder `/ (root)`. The branch is created by the first publish; if the Pages setting is not selectable yet, run step 4 first and then set it.
-4. **First release.** `git tag v0.2.0 && git push origin v0.2.0`. Wait for the `publish` job, then open `https://mblcdr.github.io/Server-Hands/`.
+4. **First release.** `git tag v0.4.0 && git push origin v0.4.0`. Wait for the `publish` job, then open `https://mblcdr.github.io/Server-Hands/`.
 
-The tag name becomes the package version (`v0.2.0` gives `0.2.0`), so tag in increasing order; apt only upgrades to a higher version. Builds from `main` get versions like `0.2.0+git42.abc1234` and are artifacts only, never published unless you run the workflow manually with "publish" ticked.
+The tag name becomes the package version (`v0.4.0` gives `0.4.0`), so tag in increasing order; apt only upgrades to a higher version. Builds from `main` get versions like `0.4.0+git42.abc1234` and are artifacts only, never published unless you run the workflow manually with "publish" ticked.
 
 Rotating the key: generate a new one, update the secret, publish a release, and tell users to replace `/etc/apt/keyrings/server-hands.gpg`. The key expires after five years as created above; extend it with `gpg --quick-set-expire` before then and update the secret.
 

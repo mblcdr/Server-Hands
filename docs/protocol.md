@@ -10,6 +10,7 @@ Single version, no negotiation, no fallback. Anything else is rejected.
 | Server TLS key | ECDSA P-256 self-signed cert | state dir | transport only; SPKI SHA-256 pinned by clients |
 | Request ephemeral `E` | X25519 | RAM only, one per request | HPKE recipient key; destroyed after approval |
 | Device identity `D` | ECDSA P-256 | Android Keystore (StrongBox preferred), non-exportable, `setUnlockedDeviceRequired` | signs approvals; public key stored on server at pairing |
+| Approval key `A` | ECDSA P-256 | Android Keystore (StrongBox preferred), non-exportable, per-use strong biometric (`setUserAuthenticationRequired`, timeout 0, invalidated by new enrolment) | signs script approvals; public key registered on the server, one per device |
 | Vault key | AES-256-GCM | Android Keystore, per-use biometric | encrypts the passphrase vault blob |
 
 Primitives: HPKE RFC 9180 base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305. Hash: SHA-256. Randomness: OS CSPRNG.
@@ -18,7 +19,7 @@ Primitives: HPKE RFC 9180 base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, Ch
 
 Messages are JSON. Signed messages use an envelope `{ "body": "<base64url of exact body bytes>", "sig": "<base64url>" }`. Signatures cover `domain_label || 0x00 || body_bytes`. Verifiers parse the body only after the signature verifies. No canonicalization is needed because the signed bytes are transmitted verbatim.
 
-Domain labels: `hands/v1/server-reply`, `hands/v1/device-request`, `hands/v1/approve`, `hands/v1/pair`.
+Domain labels: `hands/v1/server-reply`, `hands/v1/device-request`, `hands/v1/approve`, `hands/v1/pair`, `hands/v1/script-approve`.
 
 ## Pairing
 
@@ -67,14 +68,17 @@ All JSON, unknown fields rejected, binary fields base64url (no padding), `device
 - `POST /v1/pair` `{tok, device_pub (SPKI DER), device_name}`. The request **blocks** (up to 5 min) while the operator compares the SAS in `handsctl pair`; the reply is a server-signed (`hands/v1/pair`) `{device_id, server_time}`. The token is burned the moment a correct one is presented; 5 wrong tokens burn it too.
 - `POST /v1/requests/list`: device-signed `Envelope` in, server-signed `Envelope` of `{client_nonce, server_time, requests:[{req_id, expires_at, drives, e_pub, status}]}` out.
 - `POST /v1/requests/{req_id}/approve`: see above; reply is server-signed `{client_nonce, req_id, results:[{luks_uuid, result}]}`.
-- `POST /v1/scripts/list`: device-signed `Envelope` of the same `{device_id, client_nonce, ts}` body as `requests/list` (same domain; the nonce is single-use, so a captured envelope cannot be replayed at either endpoint). Reply: server-signed `{client_nonce, server_time, unlocked, scripts:[{name, label, mode: auto|manual, state: idle|queued|running|ok|failed, finished_at}]}`.
-- `POST /v1/scripts/run`: device-signed `Envelope` of `{device_id, client_nonce, ts, script}` (unknown fields are rejected, so it cannot be confused with a list body). `script` is a name from the server's config; the phone never sends a path or arguments. Refused with `not_unlocked` until every drive is unlocked, `busy` if already queued or running, `unknown_script`. Reply: server-signed `{client_nonce, script, state}`; the script runs in the background and the outcome is read with `scripts/list`.
-- Error HTTP status: 400 `bad_request`, 401 `unauthorized`, 404 `unknown_script`, 409 `replayed` / `busy` / `not_unlocked`, 410 `expired`, 429 `rate_limited`, 500 `internal`.
+- `POST /v1/scripts/list`: device-signed `Envelope` of the same `{device_id, client_nonce, ts}` body as `requests/list` (same domain; the nonce is single-use, so a captured envelope cannot be replayed at either endpoint). Reply: server-signed `{client_nonce, server_time, unlocked, scripts:[{name, label, mode: auto|manual, state: idle|queued|running|ok|failed, finished_at, requires_confirmation, biometric_protection}]}`. `requires_confirmation` is a hint for the app (ask "Run X?" first; skipped when `biometric_protection` is set, because the biometric prompt is the confirmation). `biometric_protection` is enforced by the server, see below.
+- `POST /v1/scripts/run`: device-signed `Envelope` of `{device_id, client_nonce, ts, script}` (unknown fields are rejected, so it cannot be confused with a list body). `script` is a name from the server's config; the phone never sends a path or arguments. Refused with `not_unlocked` until every drive is unlocked (only for scripts whose config has `requires_unlock = true`, the default), `busy` if already queued or running, `unknown_script`. Reply: server-signed `{client_nonce, script, state}`; the script runs in the background and the outcome is read with `scripts/list`.
+- `POST /v1/device/approval-key`: device-signed `Envelope` of `{device_id, client_nonce, ts, approval_pub}` (SPKI DER of `A`). The server keeps the first key it sees for the device; the same key again is accepted, a different one is refused with `conflict` until the operator runs `handsctl reset-approval-key` (re-pairing also clears it). Reply: server-signed `{client_nonce}`.
+- `POST /v1/scripts/challenge`: device-signed `Envelope` of `{device_id, client_nonce, ts, challenge_for}` (a different field name than `scripts/run`, so the two bodies cannot be confused). Only for scripts with `biometric_protection`; `approval_required` if no approval key is registered, `not_unlocked` if the script needs unlocked drives and they are not (so the user is not asked for a biometric in vain). Reply: server-signed `{client_nonce, script, challenge (32 random bytes), expires_at}`. The challenge lives 60 s in RAM, is bound to this device and script, replaces any earlier one for the same pair, and is burned by the first run attempt that uses it, valid or not.
+- `POST /v1/scripts/run` for a `biometric_protection` script also carries `challenge` and `approval_sig` in the signed body. `approval_sig` is `A`'s ECDSA signature (after a biometric, via a `BiometricPrompt` `CryptoObject`) over `hands/v1/script-approve || 0x00 || lp(server_pub, device_id, script, challenge)`. Missing, unknown, expired or already used challenge: `approval_required` / `expired`; bad signature: `unauthorized`. The server cannot see the biometric itself: it knows that someone held a key that the app created as biometric-bound. It does not verify Android key attestation (planned).
+- Error HTTP status: 400 `bad_request`, 401 `unauthorized`, 403 `approval_required`, 404 `unknown_script`, 409 `replayed` / `busy` / `not_unlocked` / `conflict`, 410 `expired`, 429 `rate_limited`, 500 `internal`.
 - TLS 1.3 only, self-signed P-256 certificate (CN `server-hands`; Java/Android reject an empty subject DN); clients pin the SHA-256 of its SubjectPublicKeyInfo.
 
 ## Errors
 
-Constant-shape error bodies: `{ "error": "<code>" }`, codes: `unauthorized`, `expired`, `replayed`, `bad_request`, `rate_limited`, `unknown_script`, `busy`, `not_unlocked`, `internal`. No detail that distinguishes "unknown device" from "bad signature".
+Constant-shape error bodies: `{ "error": "<code>" }`, codes: `unauthorized`, `expired`, `replayed`, `bad_request`, `rate_limited`, `unknown_script`, `busy`, `not_unlocked`, `approval_required`, `conflict`, `internal`. No detail that distinguishes "unknown device" from "bad signature".
 
 ## Rules the implementations must enforce
 
