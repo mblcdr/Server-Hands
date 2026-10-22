@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "hands-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bytes",
  "hands-proto",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "hands-proto"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "handsctl"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "hands-proto",
  "handsd",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "handsd"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bytes",
  "ed25519-dalek",

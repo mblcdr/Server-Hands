@@ -1,6 +1,6 @@
 # Signing and releasing the Android app
 
-The `app` workflow (`.github/workflows/app.yml`) tests the app and builds an APK on every push and pull request. On a tag `vX.Y.Z` it builds a **signed release APK** and attaches it, with `SHA256SUMS`, to the GitHub Release of that tag (created if missing). The same tag also drives the server package (`deb` workflow), so one tag releases both. The tag sets `versionName` (`v0.4.0` gives `0.4.0`) and `versionCode` (`major*10000 + minor*100 + patch`, e.g. 400).
+The `app` workflow (`.github/workflows/app.yml`) tests the app and builds an APK on every push and pull request. On a tag `vX.Y.Z` it builds a **signed release APK** and attaches it, with `SHA256SUMS`, to the GitHub Release of that tag (created if missing). The same tag also drives the server package (`deb` workflow), so one tag releases both. The tag sets `versionName` (`v0.5.0` gives `0.5.0`) and `versionCode` (`major*10000 + minor*100 + patch`, e.g. 500).
 
 Without the signing secrets the workflow still builds a **debug** APK as an artifact (fine for tests, not for release); a tag build without them fails on purpose.
 
@@ -39,10 +39,10 @@ Secrets are not passed to pull requests from forks, so those builds are debug AP
 ## Release
 
 ```sh
-git tag v0.4.0 && git push origin v0.4.0
+git tag v0.5.0 && git push origin v0.5.0
 ```
 
-The workflow prints the signer certificate SHA-256; it must match the fingerprint you recorded. Download `server-hands_0.4.0.apk` from the release (check it against `SHA256SUMS`) and install it with `adb install -r`, or open it on the phone.
+The workflow prints the signer certificate SHA-256; it must match the fingerprint you recorded. Download `server-hands_0.5.0.apk` from the release (check it against `SHA256SUMS`) and install it with `adb install -r`, or open it on the phone.
 
 ## Local release builds
 
@@ -50,7 +50,7 @@ The workflow prints the signer certificate SHA-256; it must match the fingerprin
 cd app
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17
 SERVERHANDS_KEYSTORE=/path/to/server-hands-release.jks SERVERHANDS_KEYSTORE_PASSWORD=... SERVERHANDS_KEY_ALIAS=serverhands \
-  ./gradlew :androidApp:assembleRelease -PversionName=0.4.0 -PversionCode=400
+  ./gradlew :androidApp:assembleRelease -PversionName=0.5.0 -PversionCode=500
 ```
 
 Without those variables `assembleRelease` produces an unsigned APK that Android will not install.

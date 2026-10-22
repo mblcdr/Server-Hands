@@ -3,7 +3,7 @@
 Phone-approved LUKS unlock for an OpenMediaVault 8 homelab.
 At boot, a tiny host service publishes an unlock request. The user opens an Android app, authenticates with a biometric bound to the Android Keystore, and the app sends the drive passphrases end-to-end encrypted to the server, which unlocks and mounts the drives and starts dependent services.
 
-Status (2026-10-21): Phases 1 to 4 done. Phase 4 was run on the real server: three drives unlock from the phone, the mergerfs pool refreshes, post-unlock scripts run, and the boot delay is cut from ~90 s to ~14 s. Release engineering is in place: signed apt repository and signed Android APK built by GitHub Actions, R8-minified release build, MIT license. Phase 5 (hardening) is partly started (release signing, R8, dependency verification). Toolchains: Rust stable, JDK 17, Gradle 9.8 wrapper, Kotlin 2.4.21. Current version: 0.4.0.
+Status (2026-10-21): Phases 1 to 4 done. Phase 4 was run on the real server: three drives unlock from the phone, the mergerfs pool refreshes, post-unlock scripts run, and the boot delay is cut from ~90 s to ~14 s. Release engineering is in place: signed apt repository and signed Android APK built by GitHub Actions, R8-minified release build, MIT license. Phase 5 (hardening) is partly started (release signing, R8, dependency verification). Toolchains: Rust stable, JDK 17, Gradle 9.8 wrapper, Kotlin 2.4.21. Current version: 0.5.0.
 
 ## Decisions (final)
 
