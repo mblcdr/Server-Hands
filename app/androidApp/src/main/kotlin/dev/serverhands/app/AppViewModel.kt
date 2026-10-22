@@ -25,10 +25,14 @@ import dev.serverhands.protocol.ScriptView
 import dev.serverhands.protocol.Scripts
 import dev.serverhands.protocol.ServerClient
 import dev.serverhands.protocol.ServerException
+import dev.serverhands.protocol.ServerStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -42,9 +46,17 @@ data class UiState(
     val message: String? = null,
     val results: List<DriveResult> = emptyList(),
     val scripts: Scripts? = null,
+    /** null until the first check; true when the last call reached the pinned server, false when it did not. */
+    val connected: Boolean? = null,
+    /** Latest machine and drive status; refreshed every few seconds while the app is in the foreground. */
+    val status: ServerStatus? = null,
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
+    private companion object {
+        const val STATUS_INTERVAL_MS = 5_000L
+    }
+
     private val store = PairingStore(app.filesDir)
     private val allowSoftware = BuildConfig.ALLOW_SOFTWARE_KEYS
     private val _state = MutableStateFlow(UiState(pairing = store.load()))
@@ -126,9 +138,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() = op("Checking server") {
         val p = _state.value.pairing ?: return@op
         val c = client(p)
-        val listing = withContext(Dispatchers.IO) { c.list() }
-        val scripts = withContext(Dispatchers.IO) { c.scripts() }
-        _state.update { it.copy(requests = listing.requests, scripts = scripts, message = if (listing.requests.isEmpty()) "No drives waiting to be unlocked." else null) }
+        try {
+            val listing = withContext(Dispatchers.IO) { c.list() }
+            val scripts = withContext(Dispatchers.IO) { c.scripts() }
+            _state.update { it.copy(requests = listing.requests, scripts = scripts, connected = true, message = if (listing.requests.isEmpty()) "No drives waiting to be unlocked." else null) }
+        } catch (e: Exception) {
+            // A refusal means the server answered; anything else (timeout, wrong identity, bad reply) means it did not count.
+            _state.update { it.copy(connected = e is ServerException) }
+            throw e
+        }
+    }
+
+    private var lastCheck = 0L
+
+    private var pollJob: Job? = null
+
+    /**
+     * Called when the app comes to the foreground: (re)connects or confirms the connection, unless something is
+     * running, and starts refreshing the server status every few seconds until [onPause].
+     */
+    fun onResume() {
+        val now = System.currentTimeMillis()
+        val s = _state.value
+        if (s.pairing != null && s.busy == null && now - lastCheck >= 3_000) {
+            lastCheck = now
+            refresh()
+        }
+        pollJob?.cancel()
+        pollJob = viewModelScope.launch {
+            while (isActive) {
+                pollStatus()
+                delay(STATUS_INTERVAL_MS)
+            }
+        }
+    }
+
+    fun onPause() {
+        pollJob?.cancel()
+        pollJob = null
+    }
+
+    /** Quiet: no busy spinner and no message, so it never gets in the way of an unlock. */
+    private suspend fun pollStatus() {
+        val p = _state.value.pairing ?: return
+        if (_state.value.busy != null) return
+        try {
+            val st = withContext(Dispatchers.IO) { client(p).status() }
+            _state.update { it.copy(status = st, connected = true) }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            _state.update { it.copy(connected = e is ServerException) }
+        }
     }
 
     /**

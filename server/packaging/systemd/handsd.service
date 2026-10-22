@@ -37,8 +37,8 @@ AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+# Other processes stay invisible; the global /proc files (meminfo, stat, uptime, loadavg) are read for the status screen.
 ProtectProc=invisible
-ProcSubset=pid
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes

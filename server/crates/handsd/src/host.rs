@@ -6,6 +6,7 @@ use hands_proto::{DriveInfo, Passphrase};
 
 use crate::config::{Config, ScriptCfg};
 use crate::luks::UnlockResult;
+use crate::sysinfo::{self, SystemStatus};
 use crate::{system, unlock};
 
 pub trait Host: Send + Sync + 'static {
@@ -19,6 +20,10 @@ pub trait Host: Send + Sync + 'static {
     fn after_unlock(&self, unlocked: &[[u8; 16]], all_done: bool);
     /// Blocking. Runs one post-unlock script; true when it succeeded. `trigger` is `auto` or `manual`.
     fn run_script(&self, script: &ScriptCfg, trigger: &str) -> bool;
+    /// Blocking. Uptime, CPU and memory counters, drive and pool usage. Read-only.
+    fn status(&self) -> SystemStatus {
+        SystemStatus::default()
+    }
 }
 
 pub struct LinuxHost {
@@ -53,5 +58,9 @@ impl Host for LinuxHost {
 
     fn run_script(&self, script: &ScriptCfg, trigger: &str) -> bool {
         system::run_script(script, trigger)
+    }
+
+    fn status(&self) -> SystemStatus {
+        sysinfo::collect(&self.cfg)
     }
 }

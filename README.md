@@ -6,6 +6,8 @@ The server boots with its encrypted drives locked. You open the Android app, con
 
 LAN only: no cloud, no relay, no account.
 
+The app has two tabs. **Server** shows the connection, the machine (uptime, CPU, memory, swap, load, refreshed every few seconds while the app is open), the drives waiting to be unlocked, then each unlocked drive and the mergerfs pool with how full they are. **Scripts** lists the scripts you configured, each with a Run button.
+
 Status: version 0.4.0. Verified on a real OpenMediaVault 8 server with three LUKS drives, a mergerfs pool and a real phone. See [PLAN.md](PLAN.md) for decisions and open items.
 
 ## How it works

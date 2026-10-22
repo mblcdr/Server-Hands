@@ -106,6 +106,15 @@ class ServerClient(
         return Listing(nonce, reply.serverTime, reply.requests)
     }
 
+    /** Uptime, CPU, memory and drive/pool usage. Read-only. */
+    fun status(): ServerStatus {
+        val nonce = freshNonce()
+        val body = WireJson.encodeToString(ListBody(Codec.b64e(signer.id), Codec.b64e(nonce), nowSecs())).toByteArray()
+        val reply = try { WireJson.decodeFromString<ServerStatus>(String(signedCall("/v1/status", body))) } catch (_: SerializationException) { throw ProtocolException() }
+        checkFresh(reply.clientNonce, nonce, reply.serverTime)
+        return reply
+    }
+
     fun scripts(): Scripts {
         val nonce = freshNonce()
         val body = WireJson.encodeToString(ListBody(Codec.b64e(signer.id), Codec.b64e(nonce), nowSecs())).toByteArray()

@@ -175,3 +175,52 @@ pub struct ScriptRunReply {
     pub script: String,
     pub state: String,
 }
+
+/// One configured drive in the status reply. `state`: `absent | locked | open | mounted`. `size` is the LUKS
+/// container; `total`, `used` and `avail` (bytes) describe the mounted filesystem and are 0 unless `mounted`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct DriveStatus {
+    pub luks_uuid: String,
+    pub label: String,
+    pub state: String,
+    pub size: u64,
+    pub total: u64,
+    pub used: u64,
+    pub avail: u64,
+}
+
+/// A pool mount (for example mergerfs) from `post_unlock.mount_units`. Sizes are 0 unless `mounted`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PoolStatus {
+    pub name: String,
+    pub mount_point: String,
+    pub fstype: String,
+    pub mounted: bool,
+    pub total: u64,
+    pub used: u64,
+    pub avail: u64,
+}
+
+/// `POST /v1/status` takes a device-signed [`ListBody`] envelope and answers with this. `cpu_percent` is the
+/// busy share (0 to 100) since the previous status call; `mem_available` is the kernel's `MemAvailable`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct StatusReply {
+    pub client_nonce: String,
+    pub server_time: u64,
+    pub hostname: String,
+    pub kernel: String,
+    pub uptime_secs: u64,
+    /// 1, 5 and 15 minute load averages.
+    pub load: [f64; 3],
+    pub cpus: u32,
+    pub cpu_percent: f64,
+    pub mem_total: u64,
+    pub mem_available: u64,
+    pub swap_total: u64,
+    pub swap_free: u64,
+    pub drives: Vec<DriveStatus>,
+    pub pools: Vec<PoolStatus>,
+}

@@ -40,3 +40,32 @@
 9. Reboot, open the app, approve. Check the OMV GUI shows the drives unlocked and mounted.
 
 Recovery (lost phone): unlock in the OMV GUI with the human passphrase; `sudo handsctl revoke <device>`; `cryptsetup luksKillSlot <dev> <slot>`.
+
+## Troubleshooting a failing script
+
+The app only shows "failed"; the reason is in the server's journal. Replace `media` with the script's `name`:
+
+```sh
+# the script's own output and exit status
+journalctl -u server-hands-script-media -n 100 --no-pager
+
+# handsd's verdict ("script media ok/failed") and refusals
+journalctl -u handsd -n 50 --no-pager | grep -i script
+```
+
+What "failed" can mean:
+
+- **The script exited non-zero.** The cause is in `server-hands-script-<name>`. The unit is transient and removed after it finishes, so use the journal rather than `systemctl status`.
+- **It hit `timeout_secs`** (default 300). The unit's journal shows it was stopped at the runtime limit; raise `timeout_secs` (up to 3600) or make the script faster.
+- **handsd refused to run it.** The file must be executable, owned by root and not writable by group or others, and so must its directory. There is no script unit then; the reason is in the `handsd` journal as `handsd: script <name> refused: ...`.
+- **`systemd-run` could not start the unit.** Only `script <name> failed` appears in the `handsd` journal and there is no unit log. Run the script by hand to see whether it starts at all.
+
+Reproduce it by hand with the same variable handsd sets:
+
+```sh
+sudo SERVER_HANDS_TRIGGER=manual /etc/server-hands/scripts/media.sh
+```
+
+Your shell's environment is richer than the transient unit's, so a failure that only happens under handsd is usually a missing `PATH` entry or `HOME`. Put `set -x` at the top of the script to log every command to the journal.
+
+A script that is refused with "needs the drives unlocked first" has `requires_unlock = true` (the default); see the script options above. A protected script that the app cannot approve is covered by `biometric_protection`: after a biometrics change run `sudo handsctl reset-approval-key <device-id>`.

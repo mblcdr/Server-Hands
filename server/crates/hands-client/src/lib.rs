@@ -296,6 +296,18 @@ impl Client {
         })
     }
 
+    pub async fn status(&self) -> Res<StatusReply> {
+        let nonce = Self::fresh_nonce();
+        let body = serde_json::to_vec(&ListBody {
+            device_id: b64e(&self.device.id()),
+            client_nonce: b64e(&nonce),
+            ts: now(),
+        })
+        .unwrap();
+        let reply = self.signed_call("/v1/status", &nonce, body).await?;
+        serde_json::from_slice(&reply).map_err(|_| "bad status reply".into())
+    }
+
     pub async fn scripts(&self) -> Res<ScriptsReply> {
         let nonce = Self::fresh_nonce();
         let body = serde_json::to_vec(&ListBody {

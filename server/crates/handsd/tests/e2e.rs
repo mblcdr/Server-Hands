@@ -24,6 +24,7 @@ struct FakeHost {
     mounted: Mutex<Vec<[u8; 16]>>,
     post_unlock_runs: AtomicUsize,
     scripts_run: Mutex<Vec<String>>,
+    status_calls: AtomicUsize,
 }
 
 impl Host for FakeHost {
@@ -52,6 +53,29 @@ impl Host for FakeHost {
     fn run_script(&self, script: &handsd::config::ScriptCfg, _trigger: &str) -> bool {
         self.scripts_run.lock().unwrap().push(script.name.clone());
         script.name != "bad"
+    }
+    fn status(&self) -> handsd::sysinfo::SystemStatus {
+        // CPU counters advance by 50 busy of 100 total on every call.
+        let n = self.status_calls.fetch_add(1, Ordering::SeqCst) as u64 + 1;
+        handsd::sysinfo::SystemStatus {
+            hostname: "box".into(),
+            uptime_secs: 3600,
+            cpus: 4,
+            cpu_busy: 50 * n,
+            cpu_total: 100 * n,
+            mem_total: 8_000,
+            mem_available: 6_000,
+            drives: vec![hands_proto::wire::DriveStatus {
+                luks_uuid: UUID.into(),
+                label: "Disk-1".into(),
+                state: "mounted".into(),
+                size: 1000,
+                total: 900,
+                used: 300,
+                avail: 600,
+            }],
+            ..Default::default()
+        }
     }
     fn after_unlock(&self, unlocked: &[[u8; 16]], all_done: bool) {
         self.mounted.lock().unwrap().extend_from_slice(unlocked);
@@ -510,4 +534,33 @@ async fn biometric_approval_is_single_use_and_bound_to_key_script_and_device() {
         .await
         .unwrap_err()
         .contains("403"));
+}
+
+#[tokio::test]
+async fn status_reports_machine_and_drive_usage_to_paired_devices_only() {
+    let env = start().await;
+    let client = pair(&env, true).await.unwrap();
+
+    let s = client.status().await.unwrap();
+    assert_eq!(
+        (s.hostname.as_str(), s.uptime_secs, s.cpus),
+        ("box", 3600, 4)
+    );
+    assert_eq!((s.mem_total, s.mem_available), (8_000, 6_000));
+    assert_eq!(s.cpu_percent, 50.0);
+    assert_eq!(s.drives.len(), 1);
+    assert_eq!(
+        (s.drives[0].total, s.drives[0].used, s.drives[0].avail),
+        (900, 300, 600)
+    );
+    assert!(s.pools.is_empty());
+
+    // A second call within a second reuses the sample instead of spinning the counters.
+    assert_eq!(client.status().await.unwrap().cpu_percent, 50.0);
+
+    let stranger = hands_client::Client {
+        pin: client.pin.clone(),
+        device: hands_client::Device::generate(),
+    };
+    assert!(stranger.status().await.unwrap_err().contains("401"));
 }

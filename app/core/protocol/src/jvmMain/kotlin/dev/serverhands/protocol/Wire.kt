@@ -139,3 +139,46 @@ internal class PairAck(
 
 @Serializable
 internal class ErrorBody(val error: String)
+
+/** `state`: absent | locked | open | mounted. [size] is the LUKS container; the rest is the mounted filesystem, 0 unless mounted. */
+@Serializable
+class DriveStatus(
+    @SerialName("luks_uuid") val luksUuid: String,
+    val label: String,
+    val state: String,
+    val size: Long,
+    val total: Long,
+    val used: Long,
+    val avail: Long,
+)
+
+/** A pool mount such as mergerfs. Sizes are 0 unless [mounted]. */
+@Serializable
+class PoolStatus(
+    val name: String,
+    @SerialName("mount_point") val mountPoint: String,
+    val fstype: String,
+    val mounted: Boolean,
+    val total: Long,
+    val used: Long,
+    val avail: Long,
+)
+
+/** Machine status. Sizes are bytes; [cpuPercent] is 0 to 100. */
+@Serializable
+class ServerStatus(
+    @SerialName("client_nonce") internal val clientNonce: String,
+    @SerialName("server_time") internal val serverTime: Long,
+    val hostname: String,
+    val kernel: String,
+    @SerialName("uptime_secs") val uptimeSecs: Long,
+    val load: List<Double>,
+    val cpus: Int,
+    @SerialName("cpu_percent") val cpuPercent: Double,
+    @SerialName("mem_total") val memTotal: Long,
+    @SerialName("mem_available") val memAvailable: Long,
+    @SerialName("swap_total") val swapTotal: Long,
+    @SerialName("swap_free") val swapFree: Long,
+    val drives: List<DriveStatus>,
+    val pools: List<PoolStatus>,
+)

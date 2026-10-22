@@ -4,19 +4,20 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedSecureTextField
 import androidx.compose.material3.OutlinedTextField
@@ -25,16 +26,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -43,7 +45,6 @@ import dev.serverhands.app.UiState
 import dev.serverhands.protocol.DriveInfo
 import dev.serverhands.protocol.RequestView
 import dev.serverhands.protocol.ScriptView
-import dev.serverhands.protocol.Scripts
 import java.nio.CharBuffer
 
 @Composable
@@ -51,47 +52,45 @@ fun HomeScreen(vm: AppViewModel, activity: FragmentActivity) {
     val ui by vm.state.collectAsStateWithLifecycle()
     var enrolling by remember { mutableStateOf<RequestView?>(null) }
     var confirming by remember { mutableStateOf<ScriptView?>(null) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
 
-    Scaffold { pad ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item { Text("Server Hands", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp)) }
-            if (ui.busy != null) item { Column { Text(ui.busy!!); LinearProgressIndicator(Modifier.fillMaxWidth()) } }
-            ui.sas?.let { code -> item { SasCard(code) } }
-            ui.message?.let { m -> item { Text(m, color = MaterialTheme.colorScheme.primary) } }
+    // Reconnect (or confirm the connection) and keep the server status fresh while the app is in the foreground.
+    LifecycleResumeEffect(Unit) {
+        vm.onResume()
+        onPauseOrDispose { vm.onPause() }
+    }
 
-            val pairing = ui.pairing
-            if (pairing == null) {
-                item { PairCard(ui, vm) }
-            } else {
-                item {
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("Paired server", style = MaterialTheme.typography.titleMedium)
-                            Text("${pairing.host}:${pairing.port}")
-                            Text("Key fingerprint", style = MaterialTheme.typography.labelMedium)
-                            Text(pairing.pin.fingerprint, fontFamily = FontFamily.Monospace)
-                            Text("This phone: ${pairing.deviceName}", style = MaterialTheme.typography.bodySmall)
-                            Text("Saved passphrases: ${pairing.drives.joinToString { it.label }.ifEmpty { "none" }}", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
+    val pairing = ui.pairing
+    Scaffold(
+        bottomBar = {
+            if (pairing != null) NavigationBar {
+                NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Icon(AppIcons.Server, null) }, label = { Text("Server") })
+                NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Icon(AppIcons.Terminal, null) }, label = { Text("Scripts") })
+            }
+        },
+    ) { pad ->
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            when {
+                pairing == null -> LazyColumn(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item { Header("Server Hands") }
+                    item { StatusStrip(ui) }
+                    item { PairCard(ui, vm) }
                 }
-                item { Button(onClick = vm::refresh, enabled = ui.busy == null) { Text("Check for unlock requests") } }
-                items(ui.requests, key = { it.reqId }) { r ->
-                    RequestCard(r, pairing.drives.map { it.uuid }.toSet(), ui.busy == null,
-                        onUnlock = { vm.unlock(activity, r) }, onEnroll = { enrolling = r })
-                }
-                ui.scripts?.takeIf { it.scripts.isNotEmpty() }?.let { sc ->
-                    item {
-                        ScriptsCard(sc, ui.busy == null) { s ->
-                            // With biometric protection the biometric prompt is the confirmation: no extra dialog.
-                            if (s.requiresConfirmation && !s.biometricProtection) confirming = s else vm.runScript(activity, s)
-                        }
-                    }
-                }
-                item { TextButton(onClick = vm::forget, enabled = ui.busy == null) { Text("Forget this server") } }
+                tab == 0 -> ServerTab(
+                    ui, pairing,
+                    onRefresh = vm::refresh,
+                    onUnlock = { r -> vm.unlock(activity, r) },
+                    onEnroll = { r -> enrolling = r },
+                    onForget = vm::forget,
+                )
+                else -> ScriptsTab(
+                    ui,
+                    onCheck = vm::refresh,
+                    onRun = { s ->
+                        // With biometric protection the biometric prompt is the confirmation: no extra dialog.
+                        if (s.requiresConfirmation && !s.biometricProtection) confirming = s else vm.runScript(activity, s)
+                    },
+                )
             }
         }
     }
@@ -135,27 +134,14 @@ fun HomeScreen(vm: AppViewModel, activity: FragmentActivity) {
 }
 
 @Composable
-private fun ScriptsCard(scripts: Scripts, enabled: Boolean, onRun: (ScriptView) -> Unit) = Card(Modifier.fillMaxWidth()) {
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Scripts", style = MaterialTheme.typography.titleMedium)
-        if (!scripts.unlocked) Text("Drives are locked. Scripts that need the data are refused until they are unlocked.", style = MaterialTheme.typography.bodySmall)
-        scripts.scripts.forEach { s ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(s.label)
-                    Text(
-                        (if (s.mode == "auto") "runs automatically" else "manual") + ": " + when (s.state) {
-                            "idle" -> "not run yet"; "queued" -> "waiting"; "running" -> "running"
-                            "ok" -> "finished"; else -> "failed"
-                        } + if (s.biometricProtection) " (needs biometric)" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (s.state == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                OutlinedButton(onClick = { onRun(s) }, enabled = enabled && !s.busy) { Text(if (s.state == "failed") "Retry" else "Run") }
-            }
-        }
-    }
+internal fun Header(title: String) = Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
+
+/** What is going on right now: progress, the pairing code, the last message. */
+@Composable
+internal fun StatusStrip(ui: UiState) = Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ui.busy?.let { Column { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) } }
+    ui.sas?.let { SasCard(it) }
+    ui.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
 }
 
 @Composable
@@ -182,25 +168,6 @@ private fun PairCard(ui: UiState, vm: AppViewModel) {
             ) { Text("Scan QR code") }
             OutlinedTextField(pasted, { pasted = it }, label = { Text("or paste the hands:// link") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             OutlinedButton(onClick = { vm.pair(pasted, deviceName); pasted = "" }, enabled = ui.busy == null && pasted.isNotBlank()) { Text("Pair") }
-        }
-    }
-}
-
-@Composable
-private fun RequestCard(r: RequestView, enrolled: Set<String>, enabled: Boolean, onUnlock: () -> Unit, onEnroll: () -> Unit) {
-    val canUnlock = r.drives.any { it.luksUuid in enrolled }
-    val needsEnroll = r.drives.any { it.luksUuid !in enrolled }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Unlock request", style = MaterialTheme.typography.titleMedium)
-            r.drives.forEach {
-                Text("${it.label}  (${it.size / 1_000_000_000} GB)" + if (it.luksUuid in enrolled) "" else "  passphrase not saved")
-                Text(it.luksUuid, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (canUnlock) Button(onClick = onUnlock, enabled = enabled) { Text("Unlock") }
-                if (needsEnroll) OutlinedButton(onClick = onEnroll, enabled = enabled) { Text("Save passphrases") }
-            }
         }
     }
 }

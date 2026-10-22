@@ -105,6 +105,16 @@ class InteropTest {
     }
 
     @Test
+    fun statusIsReadableAfterPairing() {
+        val (pin, token) = startServer()
+        val client = ServerClient(pin, SoftSigner())
+        client.pair(token, "kotlin test") {}
+        val s = client.status()
+        assertEquals(3, s.load.size)
+        assertTrue(s.cpuPercent in 0.0..100.0)
+    }
+
+    @Test
     fun pairListApproveRetry() {
         val (pin, token) = startServer()
         val client = ServerClient(pin, SoftSigner())

@@ -20,6 +20,7 @@ use crate::host::Host;
 use crate::luks::UnlockResult;
 use crate::state::{Refusal, State, SystemClock};
 use crate::store::{new_device_record, DeviceRecord, Store};
+use crate::sysinfo::SystemStatus;
 
 pub const PAIR_TOKEN_TTL: Duration = Duration::from_secs(300);
 const SCRIPT_CHALLENGE_TTL: Duration = Duration::from_secs(60);
@@ -92,6 +93,8 @@ pub struct Ctx {
     /// script name -> (state, unix time it finished)
     scripts: Mutex<std::collections::HashMap<String, (RunState, u64)>>,
     challenges: Mutex<Vec<ScriptChallenge>>,
+    /// Last CPU sample: (busy, total, when taken, percent computed from it).
+    cpu: Mutex<Option<(u64, u64, Instant, f64)>>,
 }
 
 pub type Reply = (u16, String);
@@ -147,6 +150,7 @@ impl Ctx {
             unlock_gate: tokio::sync::Mutex::new(()),
             scripts: Mutex::new(Default::default()),
             challenges: Mutex::new(Vec::new()),
+            cpu: Mutex::new(None),
         })
     }
 
@@ -186,6 +190,7 @@ impl Ctx {
         match path {
             "/v1/pair" => self.pair(body).await,
             "/v1/requests/list" => self.list(body),
+            "/v1/status" => self.status(body).await,
             "/v1/scripts/list" => self.scripts_list(body),
             "/v1/scripts/challenge" => self.scripts_challenge(body),
             "/v1/scripts/run" => self.scripts_run(body),
@@ -503,6 +508,69 @@ impl Ctx {
             self.host.after_unlock(&[], true);
             self.run_auto_scripts();
         }
+    }
+
+    // ---- status ---------------------------------------------------------------------------------
+
+    /// CPU busy share since the previous sample. Samples closer than a second reuse the last answer; the very
+    /// first call takes a second sample after a short pause so it has something to compare with.
+    async fn cpu_percent(&self, first: &SystemStatus) -> f64 {
+        let take = |s: &SystemStatus, prev: Option<(u64, u64, Instant, f64)>| {
+            let pct = prev.map_or(0.0, |(b, t, _, _)| {
+                crate::sysinfo::cpu_percent((b, t), (s.cpu_busy, s.cpu_total))
+            });
+            (s.cpu_busy, s.cpu_total, Instant::now(), pct)
+        };
+        let prev = *self.cpu.lock().unwrap();
+        match prev {
+            Some((_, _, at, pct)) if at.elapsed() < Duration::from_secs(1) => pct,
+            Some(_) => {
+                let n = take(first, prev);
+                *self.cpu.lock().unwrap() = Some(n);
+                n.3
+            }
+            None => {
+                let base = (first.cpu_busy, first.cpu_total, Instant::now(), 0.0);
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                let host = self.host.clone();
+                let second = tokio::task::spawn_blocking(move || host.status())
+                    .await
+                    .unwrap_or_default();
+                let n = take(&second, Some(base));
+                *self.cpu.lock().unwrap() = Some(n);
+                n.3
+            }
+        }
+    }
+
+    async fn status(self: &Arc<Self>, body: &[u8]) -> Reply {
+        let claimed =
+            match self.authenticate::<ListBody>(body, |b| (&b.device_id, &b.client_nonce, b.ts)) {
+                Ok(v) => v,
+                Err(r) => return r,
+            };
+        let host = self.host.clone();
+        let Ok(s) = tokio::task::spawn_blocking(move || host.status()).await else {
+            return err("internal");
+        };
+        let cpu_percent = self.cpu_percent(&s).await;
+        let reply = StatusReply {
+            client_nonce: claimed.client_nonce,
+            server_time: self.state.lock().unwrap().now(),
+            hostname: s.hostname,
+            kernel: s.kernel,
+            uptime_secs: s.uptime_secs,
+            load: s.load,
+            cpus: s.cpus,
+            cpu_percent,
+            mem_total: s.mem_total,
+            mem_available: s.mem_available,
+            swap_total: s.swap_total,
+            swap_free: s.swap_free,
+            drives: s.drives,
+            pools: s.pools,
+        };
+        self.sign_reply(DOMAIN_SERVER_REPLY, &reply)
     }
 
     // ---- post-unlock scripts -------------------------------------------------------------------
