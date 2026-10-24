@@ -52,15 +52,28 @@ pub fn locked_drives(cfg: &Config, crypttab: &Path) -> Vec<hands_proto::DriveInf
     out
 }
 
-fn systemctl(args: &[&str]) -> bool {
-    Command::new("systemctl")
+/// Runs `systemctl`; on failure returns why (its first error line, or the exit status), which ends up in the journal.
+fn systemctl(args: &[&str]) -> Result<(), String> {
+    let out = Command::new("systemctl")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("cannot run systemctl: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let msg = String::from_utf8_lossy(&out.stderr);
+    let line = msg.lines().map(str::trim).find(|l| !l.is_empty());
+    Err(match line {
+        Some(l) => format!(
+            "{} ({})",
+            l.chars().take(300).collect::<String>(),
+            out.status
+        ),
+        None => out.status.to_string(),
+    })
 }
 
 /// ext4 superblock UUID of a (decrypted) block device: magic 0xEF53 at 1080, UUID at 1128.
@@ -110,7 +123,9 @@ fn mount_unlocked(uuid: &[u8; 16], fstab: &Path) {
     };
     if let Some(mp) = fstab_mountpoint(fstab, &fs_uuid) {
         // systemd often wins the race and mounts it already; starting an active unit is a no-op.
-        systemctl(&["start", &mp]);
+        if let Err(e) = systemctl(&["start", &mp]) {
+            eprintln!("handsd: starting mount {mp} failed: {e}");
+        }
     }
 }
 
@@ -127,15 +142,22 @@ pub fn mount_drives(unlocked: &[[u8; 16]], fstab: &Path) {
 /// directories that only exist now. On a pool that failed at boot it is simply a start.
 pub fn post_unlock(post: &PostUnlock, run_dir: &Path) {
     for unit in &post.mount_units {
-        systemctl(&["reset-failed", unit]);
-        if !systemctl(&["restart", unit]) {
-            eprintln!("handsd: restarting {unit} failed (see journalctl -u {unit})");
+        // reset-failed errors for a unit that never failed ("not loaded"); only the restart result matters.
+        let _ = systemctl(&["reset-failed", unit]);
+        match systemctl(&["restart", unit]) {
+            Ok(()) => eprintln!("handsd: restarted {unit}"),
+            Err(e) => eprintln!(
+                "handsd: restarting {unit} failed: {e} (see journalctl -u {unit}; check the name with systemctl list-units --type=mount)"
+            ),
         }
     }
     let _ = fs::create_dir_all(run_dir);
     let _ = fs::write(run_dir.join("unlocked"), b"");
     for unit in &post.service_units {
-        systemctl(&["start", "--no-block", unit]);
+        match systemctl(&["start", "--no-block", unit]) {
+            Ok(()) => eprintln!("handsd: started {unit}"),
+            Err(e) => eprintln!("handsd: starting {unit} failed: {e}"),
+        }
     }
 }
 

@@ -13,7 +13,9 @@ request_ttl_secs = 600
 [post_unlock]
 # Pool mounts, restarted (after reset-failed) once every present configured drive is unlocked and its fstab mount is up.
 # This is what the OMV mergerfs plugin's "restart pool" does: `systemctl restart <escaped mount point>.mount`.
-# Find the unit name with: systemd-escape --path --suffix=mount /srv/mergerfs/Pool
+# Find the unit name (pool mounted): findmnt -t fuse.mergerfs -o TARGET   (e.g. /srv/mergerfs/Pool)
+#   systemd-escape --path --suffix=mount /srv/mergerfs/Pool   ->  srv-mergerfs-Pool.mount
+#   systemctl list-units --type=mount | grep -i mergerfs       (confirms the unit exists)
 mount_units = []          # e.g. ['srv-mergerfs-Pool.mount']
 # Started with --no-block after /run/server-hands/unlocked exists.
 # Prefer [[script]] below for containers; use this only for plain systemd units.
